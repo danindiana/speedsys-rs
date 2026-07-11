@@ -2,6 +2,7 @@ mod sysinfo;
 mod bench;
 mod app;
 mod ui;
+mod report;
 
 use app::{App, Screen};
 use bench::{BenchMsg, DiskBenchResult};
@@ -22,6 +23,23 @@ fn main() -> io::Result<()> {
 
     if args.iter().any(|a| a == "--dump") {
         return dump_mode(&sys);
+    }
+
+    // Handle report export (requires running a benchmark first)
+    if let Some(idx) = args.iter().position(|a| a == "--report") {
+        if idx + 1 < args.len() {
+            return export_report(&sys, &args[idx + 1], "json");
+        }
+    }
+    if let Some(idx) = args.iter().position(|a| a == "--report-html") {
+        if idx + 1 < args.len() {
+            return export_report(&sys, &args[idx + 1], "html");
+        }
+    }
+    if let Some(idx) = args.iter().position(|a| a == "--report-csv") {
+        if idx + 1 < args.len() {
+            return export_report(&sys, &args[idx + 1], "csv");
+        }
     }
 
     enable_raw_mode()?;
@@ -302,4 +320,45 @@ fn start_disk_test(app: &mut App, samples: usize, sample_size_mb: usize) {
 
     app.worker = Some(handle);
     app.disk_test_rx = Some(rx);
+}
+
+fn export_report(sys: &sysinfo::SysInfo, path: &str, format: &str) -> io::Result<()> {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || run_benchmarks(tx));
+
+    let mut bench_results = bench::BenchResults::default();
+    let disk_results = std::collections::HashMap::new();
+
+    // Collect benchmark results
+    while let Ok(msg) = rx.recv() {
+        match msg {
+            BenchMsg::Status(s) => bench_results.status = s,
+            BenchMsg::CpuDone(mops) => bench_results.cpu_mops = Some(mops),
+            BenchMsg::SweepPoint(log2kb, mbs) => bench_results.sweep.push((log2kb, mbs)),
+            _ => {}
+        }
+        if bench_results.status == "PASSED" {
+            break;
+        }
+    }
+
+    let rep = report::Report::new(sys.clone(), bench_results, disk_results);
+
+    match format {
+        "json" => {
+            rep.export_json(path).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            println!("✓ Report exported to {}", path);
+        }
+        "html" => {
+            rep.export_html(path).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            println!("✓ Report exported to {}", path);
+        }
+        "csv" => {
+            rep.export_csv(path).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            println!("✓ Report exported to {}", path);
+        }
+        _ => eprintln!("Unknown format: {}", format),
+    }
+
+    Ok(())
 }
