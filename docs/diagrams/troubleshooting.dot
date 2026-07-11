@@ -1,0 +1,21 @@
+digraph troubleshooting {
+    rankdir=TB;
+    node[shape=diamond,style="rounded,filled",fillcolor="#f4e8e8"];
+    node[shape=box,style="rounded,filled",fillcolor="#e8f4e8"];
+
+    start[label="Issue?",shape=box];
+    perm[label="Permission\nDenied?",shape=diamond];
+    no_disks[label="No Disks\nDetected?",shape=diamond];
+    hangs[label="Test\nHangs?",shape=diamond];
+
+    perm_yes[label="Try: sudo ./speedsys-rs\nOr: usermod -aG disk $USER",shape=box];
+    no_disks_yes[label="Check: ls -la /sys/block/\nVerify device readable",shape=box];
+    hangs_yes[label="Normal for HDDs\nWatch progress bar\nEst. time in UI",shape=box];
+
+    start -> perm;
+    perm -> no_disks[label="No"];
+    perm -> perm_yes[label="Yes"];
+    no_disks -> hangs[label="No"];
+    no_disks -> no_disks_yes[label="Yes"];
+    hangs -> hangs_yes[label="Yes"];
+}

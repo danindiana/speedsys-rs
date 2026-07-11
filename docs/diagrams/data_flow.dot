@@ -1,0 +1,38 @@
+digraph data_flow {
+    rankdir=TB;
+    node[shape=box,style="rounded,filled",fillcolor="#f0e8f4"];
+
+    cli_parse[label="CLI Parse\n(--dump, -t1, -T, --screenshot)"];
+    dispatch[label="Mode Dispatch"];
+    tui[label="TUI Interactive"];
+    test[label="Test Mode\n(-t1/-T)"];
+    screenshot[label="Screenshot Mode"];
+    dump[label="Dump Mode\n(--dump)"];
+
+    thread_cpu[label="CPU Thread"];
+    thread_mem[label="Memory Thread"];
+    thread_disk[label="Disk Thread\n(optional)"];
+
+    channel[label="mpsc Channel\nBenchMsg"];
+    event_loop[label="Main Event Loop\n(key/msg recv)"];
+    app_state[label="App State\n(screen, results)"];
+    needs_render[label="App::needs_render()\nConditional redraw"];
+    ui_render[label="ui::render_screen()"];
+    term[label="Terminal"];
+
+    cli_parse -> dispatch;
+    dispatch -> tui;
+    dispatch -> test;
+    dispatch -> screenshot;
+    dispatch -> dump;
+
+    tui -> event_loop;
+    thread_cpu -> channel;
+    thread_mem -> channel;
+    thread_disk -> channel;
+    channel -> event_loop;
+    event_loop -> app_state;
+    app_state -> needs_render;
+    needs_render -> ui_render[label="if changed"];
+    ui_render -> term;
+}

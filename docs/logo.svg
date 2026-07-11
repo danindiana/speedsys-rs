@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 100">
+  <defs>
+    <style>
+      .bg { fill: #0d1117; }
+      .text { font-family: 'Monaco', 'Courier New', monospace; font-weight: bold; }
+      .title { font-size: 32px; fill: #00c9ff; }
+      .accent { fill: #00c9ff; stroke: #00c9ff; stroke-width: 2; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="300" height="100"/>
+
+  <!-- Terminal window glyph -->
+  <rect class="accent" x="15" y="15" width="50" height="45" rx="3" ry="3" fill="none"/>
+  <line class="accent" x1="15" y1="25" x2="65" y2="25"/>
+  <circle class="accent" cx="22" cy="19" r="2"/>
+  <circle class="accent" cx="32" cy="19" r="2"/>
+  <circle class="accent" cx="42" cy="19" r="2"/>
+
+  <!-- Bars inside terminal (speed indicator) -->
+  <rect class="accent" x="21" y="32" width="4" height="5"/>
+  <rect class="accent" x="29" y="30" width="4" height="7"/>
+  <rect class="accent" x="37" y="28" width="4" height="9"/>
+  <rect class="accent" x="45" y="26" width="4" height="11"/>
+
+  <!-- Text: speedsys-rs -->
+  <text x="75" y="52" class="text title">speedsys-rs</text>
+</svg>

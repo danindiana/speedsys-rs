@@ -1,3 +1,7 @@
+<div align="center">
+
+![Logo](docs/logo.svg)
+
 # speedsys-rs — Rust/ratatui Reimplementation of SYSTEM SPEED TEST 4.78
 
 A modern Rust port of the classic DOS benchmark **SYSTEM SPEED TEST 4.78** by Vladimir Afanasiev, featuring a TUI interface, disk benchmarking, and modular architecture.
@@ -5,6 +9,8 @@ A modern Rust port of the classic DOS benchmark **SYSTEM SPEED TEST 4.78** by Vl
 [![GitHub](https://img.shields.io/badge/GitHub-danindiana%2Fspeedsys--rs-blue)](https://github.com/danindiana/speedsys-rs)
 [![Rust](https://img.shields.io/badge/Rust-1.74%2B-orange)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
+
+</div>
 
 ---
 
@@ -50,8 +56,28 @@ A modern Rust port of the classic DOS benchmark **SYSTEM SPEED TEST 4.78** by Vl
 - **CPU benchmark ladder**: Integer LCG performance (Mops/s) vs vintage reference speeds
 - **Memory throughput staircase**: Sequential read speed (4 KB–64 MB) showing cache hierarchy effects
 - **Headless mode**: `--dump` renders one frame as ASCII/ANSI for CI/screenshots
-- **Read-only**: All disk I/O uses `O_DIRECT + O_RDONLY` — no write benchmarks on raw devices
-- **Graceful errors**: Permission denied → shows hint; O_DIRECT unavailable → falls back to `posix_fadvise`
+- **Screenshot generation**: `--screenshot [overview|disk-select|disk-test] --screenshot-out FILE` renders SVG terminal mockups
+- **Read-only**: All disk I/O uses buffered reads with `posix_fadvise` hints — no write benchmarks on raw devices
+- **Graceful errors**: Permission denied → shows hint; no disks → suggests checks in troubleshooting
+- **Conditional rendering**: `App::needs_render()` skips TUI redraws when state unchanged (Phase 9 optimization)
+- **Golden regression tests**: 16 integration tests covering CLI parsing, output formats, benchmark validity (Phase 8)
+
+---
+
+## Screenshots
+
+<table>
+<tr>
+<td><strong>Overview</strong> – System info + CPU/memory benchmarks</td>
+<td><strong>Disk Select</strong> – Choose target drive</td>
+<td><strong>Disk Test</strong> – Linear read & seek latency (sample data shown)</td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/overview.svg" alt="Overview" width="300"/></td>
+<td><img src="docs/screenshots/disk-select.svg" alt="Disk Select" width="300"/></td>
+<td><img src="docs/screenshots/disk-test.svg" alt="Disk Test" width="300"/></td>
+</tr>
+</table>
 
 ---
 
@@ -135,34 +161,32 @@ Renders one frame as ASCII/ANSI and exits (useful for CI, screenshots, automatio
 
 ## Architecture
 
-### Modules
-```
-src/
-├── main.rs              # Event loop, screen routing, test launcher
-├── sysinfo.rs           # System inventory from /proc and /sys
-├── app.rs               # State machine, navigation, disk list
-├── bench/
-│   ├── cpu.rs           # LCG integer benchmark
-│   ├── mem.rs           # Memory throughput sweep
-│   ├── disk.rs          # Linear read, random seek, device scanning
-│   └── mod.rs           # Shared types
-└── ui/
-    ├── overview.rs      # System info + CPU/memory display
-    ├── disks.rs         # Drive selector + test results
-    ├── common.rs        # Shared widgets
-    └── mod.rs           # Screen router
-```
+### Module Diagram
+![Architecture](docs/diagrams/architecture.svg)
+
+### State Machine
+![State Machine](docs/diagrams/state_machine.svg)
+
+### Data Flow
+![Data Flow](docs/diagrams/data_flow.svg)
+
+### Disk Benchmark Pipeline
+![Disk Pipeline](docs/diagrams/disk_benchmark_pipeline.svg)
 
 ### Design Patterns
-- **State Machine**: `Screen` enum for navigation
-- **Event Loop**: Non-blocking I/O with 100 ms poll timeout
-- **Channels**: mpsc for background thread → UI communication
+- **State Machine**: `Screen` enum for navigation (Overview → DiskSelect → DiskTest → MemTest → Report)
+- **Event Loop**: Non-blocking I/O with 100 ms poll timeout, key/message dispatch
+- **Channels**: mpsc for background CPU/memory/disk threads → UI communication
 - **Graceful Shutdown**: `Arc<AtomicBool>` for worker cancellation
-- **No External Deps**: System info from `/proc` and `/sys` only
+- **Conditional Rendering**: `App::needs_render()` avoids redraws when state unchanged
+- **No External Deps**: System info from `/proc` and `/sys` only (no shelling out)
 
 ---
 
 ## Troubleshooting
+
+### Quick Reference
+![Troubleshooting Flowchart](docs/diagrams/troubleshooting.svg)
 
 ### Permission Denied Errors
 ```bash
@@ -177,16 +201,19 @@ newgrp disk  # Apply immediately
 ### Full Test Hangs
 **It's likely still running** (especially on mechanical HDDs). Full test reads 8 GB across the drive surface:
 - NVMe: 2–3 minutes
+- SATA SSD: 4–8 minutes
 - HDD: 15–30+ minutes
 
-Watch stderr for `[WORKER] Linear read progress: X/512` messages.
+Watch the progress bar in the UI for estimated time remaining.
 
 ### No Disks Detected
 Check that block devices exist:
 ```bash
-sudo ls -l /sys/block/
-sudo ls -l /dev/nvme* /dev/sd*
+ls -l /sys/block/
+ls -l /dev/nvme* /dev/sd*
 ```
+
+Root access may be required for device I/O. Try running with `sudo` or joining the `disk` group.
 
 ---
 
@@ -212,14 +239,61 @@ sudo ls -l /dev/nvme* /dev/sd*
 | `crossterm` | 0.27 | Terminal events & control |
 | `ratatui` | 0.26 | TUI framework |
 | `rand` | 0.8 | Random offset generation |
+| `libc` | 0.2 | Unix syscalls (posix_fadvise) |
+| `serde_json` | 1.0 | JSON report export |
+| `chrono` | 0.4 | Timestamps |
+| `clap` | 4.4 | CLI argument parsing |
 
 ---
 
 ## Roadmap
 
-**Phase 3** (planned): Memory improvements, multi-core CPU variant, memory error test
-**Phase 4** (planned): Report export (text, ANSI, HTML)
-**Phase 5** (stretch): CLI argument parity with original SPEEDSYS
+### Completed: Phases 0–9 ✅
+
+![Roadmap](docs/diagrams/roadmap.svg)
+
+**Phase 0**: Skeleton & modular architecture
+**Phase 1**: Menu & drive selector, disk info
+**Phase 2**: Disk benchmarks (linear read, random seek)
+**Phase 3**: TUI core, event loop, cancellation
+**Phase 4**: Graphical display (charts via ratatui)
+**Phase 5**: Test modes (quick/full), CLI argument dispatch
+**Phase 6**: CLI parity (`--list-disks`, `--dump`, `-t1/-T`, report formats)
+**Phase 7**: Hygiene (clippy -D warnings → 0 warnings)
+**Phase 8**: Golden snapshot regression tests (16 tests, all passing)
+**Phase 9**: Performance optimization (device caching, conditional redraw, read-ahead hints)
+**Phase 10**: Documentation & polish (logo, screenshots, diagrams, README refresh) ← **YOU ARE HERE**
+
+### Deferred (Future)
+
+- **SMART integration**: Full smartctl output parsing for temperature/health
+- **MemTest/Report screens**: Currently stubbed, render Overview instead
+- **Async I/O**: Phase 9C optimization deferred for future
+- **Packaging**: deb/rpm/Homebrew distributions
+- **CI/CD**: Automated golden test runs in GitHub Actions
+
+---
+
+## Asset Regeneration
+
+Screenshots and diagrams in this README are reproducible and auto-generated from code:
+
+### Regenerate Diagrams
+```bash
+./scripts/render_diagrams.sh
+# Outputs: docs/diagrams/*.{svg,png}
+# Requires: graphviz (apt install graphviz)
+```
+
+### Regenerate Screenshots
+```bash
+./scripts/render_screenshots.sh
+# Builds release binary, runs --screenshot for each screen, converts to PNG
+# Outputs: docs/screenshots/*.{svg,png}
+# Requires: rsvg-convert (apt install librsvg2-bin)
+```
+
+All visual assets stay synchronized with the actual code via automation.
 
 ---
 

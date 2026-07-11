@@ -1,0 +1,36 @@
+digraph architecture {
+    rankdir=TB;
+    node[shape=box,style="rounded,filled",fillcolor="#e8f4f8"];
+
+    main[label="main.rs\n(entry, mode dispatch)"];
+    cli[label="cli.rs\n(Args, parsing)"];
+    app[label="app.rs\n(App state, FSM)"];
+    sysinfo[label="sysinfo.rs\n(CPU/RAM info)"];
+    ui[label="ui/mod.rs\n(render_screen)"];
+    report[label="report.rs\n(JSON/CSV/HTML)"];
+
+    bench_cpu[label="bench/cpu.rs\n(CPU MOPS)"];
+    bench_mem[label="bench/mem.rs\n(Mem throughput)"];
+    bench_disk[label="bench/disk.rs\n(Linear+Seek)"];
+    bench_mod[label="bench/mod.rs\n(BenchMsg, Results)"];
+
+    ui_overview[label="ui/overview.rs"];
+    ui_disks[label="ui/disks.rs"];
+    ui_common[label="ui/common.rs"];
+
+    main -> cli;
+    main -> app;
+    main -> sysinfo;
+    main -> ui;
+    main -> report;
+    main -> bench_mod;
+
+    app -> bench_mod;
+    ui -> ui_overview;
+    ui -> ui_disks;
+    ui -> ui_common;
+
+    bench_mod -> bench_cpu;
+    bench_mod -> bench_mem;
+    bench_mod -> bench_disk;
+}

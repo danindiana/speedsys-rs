@@ -48,6 +48,14 @@ pub struct Args {
     /// Non-interactive test mode (run and exit, no TUI)
     #[arg(long)]
     pub test: bool,
+
+    /// Generate screenshot of a specific screen (overview, disk-select, disk-test)
+    #[arg(long, value_name = "SCREEN")]
+    pub screenshot: Option<String>,
+
+    /// Output path for screenshot SVG
+    #[arg(long, value_name = "FILE")]
+    pub screenshot_out: Option<String>,
 }
 
 impl Args {

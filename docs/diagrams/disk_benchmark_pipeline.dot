@@ -1,0 +1,40 @@
+digraph disk_pipeline {
+    rankdir=TB;
+    node[shape=box,style="rounded,filled",fillcolor="#f4f0e8"];
+
+    open_dev[label="Open Device\n/dev/sdX"];
+    fadvise[label="posix_fadvise\n(SEQUENTIAL/RANDOM)"];
+    linear_loop[label="Linear Read Loop"];
+    seek_loop[label="Random Seek Loop"];
+
+    linear_seek[label="seek()"];
+    linear_read[label="read(sample_size)"];
+    linear_time[label="measure time"];
+    linear_calc[label="calc MB/s"];
+    linear_progress[label="periodic BenchMsg::Progress"];
+
+    seek_random[label="rand offset"];
+    seek_seek[label="seek()"];
+    seek_read[label="read(4KB)"];
+    seek_time[label="measure latency"];
+    seek_progress[label="periodic BenchMsg::Progress"];
+
+    linear_agg[label="aggregate\nmin/avg/max"];
+    seek_agg[label="aggregate\nmin/avg/max"];
+    results[label="DiskBenchResult"];
+
+    open_dev -> fadvise;
+    fadvise -> linear_loop;
+    fadvise -> seek_loop;
+
+    linear_loop -> linear_seek -> linear_read -> linear_time -> linear_calc -> linear_progress;
+    linear_progress -> linear_loop[label="loop"];
+    linear_progress -> linear_agg[label="done"];
+
+    seek_loop -> seek_random -> seek_seek -> seek_read -> seek_time -> seek_progress;
+    seek_progress -> seek_loop[label="loop"];
+    seek_progress -> seek_agg[label="done"];
+
+    linear_agg -> results;
+    seek_agg -> results;
+}

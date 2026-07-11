@@ -1,0 +1,20 @@
+digraph state_machine {
+    rankdir=LR;
+    node[shape=box,style=rounded];
+
+    Overview[label="Overview\n(CPU+Mem benchmarks)"];
+    DiskSelect[label="DiskSelect\n(Choose target)"];
+    DiskTest[label="DiskTest\n(Linear+Seek)"];
+    MemTest[label="MemTest\n(Stubbed)"];
+    Report[label="Report\n(Stubbed)"];
+
+    Overview -> DiskSelect[label="F2 (Tab)"];
+    DiskSelect -> DiskTest[label="Enter"];
+    DiskTest -> DiskSelect[label="Esc"];
+    Overview -> MemTest[label="F3"];
+    Overview -> Report[label="F4"];
+    MemTest -> Overview[label="(→Overview)"];
+    Report -> Overview[label="(→Overview)"];
+    DiskSelect -> Overview[label="F1/Esc"];
+    DiskTest -> Overview[label="F1"];
+}
