@@ -224,11 +224,25 @@ fn run_benchmarks(tx: mpsc::Sender<BenchMsg>) {
 }
 
 fn start_disk_test(app: &mut App, samples: usize, sample_size_mb: usize) {
+    // Safety check: if no disks in app, something went wrong
+    if app.disks.is_empty() {
+        app.bench_results.status = "No disks detected. Check permissions.".into();
+        return;
+    }
+
     let device_name = app.disks.get(app.selected_disk).cloned().unwrap_or_default();
+    if device_name.is_empty() {
+        app.bench_results.status = "Invalid disk selection.".into();
+        return;
+    }
+
     let all_devices = bench::disk::scan_disks();
     let device = match all_devices.iter().find(|d| d.name == device_name) {
         Some(d) => d.clone(),
-        None => return,
+        None => {
+            app.bench_results.status = format!("Disk {} not found in scan.", device_name);
+            return;
+        }
     };
 
     let (tx, rx) = mpsc::channel();

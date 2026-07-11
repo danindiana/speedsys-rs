@@ -220,23 +220,17 @@ pub fn bench_linear_read(
 
         // Time the read of exactly sample_bytes
         let read_start = Instant::now();
-        let mut total_read = 0;
-        while total_read < sample_bytes {
-            let bytes_read = file
-                .read(&mut buf.as_mut_slice()[total_read..])
-                .map_err(|e| format!("Read failed: {}", e))?;
-
-            if bytes_read == 0 {
-                break; // EOF
-            }
-            total_read += bytes_read;
-        }
+        let bytes_read = file
+            .read_exact(buf.as_mut_slice())
+            .map_err(|e| format!("Read failed: {}", e))
+            .ok()
+            .unwrap_or(0);
 
         black_box(buf.as_mut_slice());
         let elapsed = read_start.elapsed().as_secs_f64();
 
         // Only count samples that read the full size
-        if total_read == sample_bytes && elapsed > 0.0 {
+        if bytes_read == sample_bytes && elapsed > 0.0 {
             let speed_mbs = (sample_bytes as f64) / elapsed / 1e6;
             total_speed += speed_mbs;
             min_speed = min_speed.min(speed_mbs);

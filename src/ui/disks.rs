@@ -123,6 +123,20 @@ pub fn render_test(f: &mut Frame, app: &App) {
         )));
     }
 
+    // Add status bar at the bottom
+    lines.push(Line::from(""));
+    let status_color = if app.bench_results.status.contains("error") || app.bench_results.status.contains("Error") {
+        Color::Red
+    } else if app.bench_results.status == "PASSED" {
+        Color::Green
+    } else {
+        Color::Yellow
+    };
+    lines.push(Line::from(Span::styled(
+        format!("Status: {}", app.bench_results.status),
+        Style::default().fg(status_color),
+    )));
+
     let para = Paragraph::new(lines)
         .block(cyan_block(" Disk Test Results [t] Quick [T] Full [q] Back "))
         .scroll((0, 0));
