@@ -185,17 +185,28 @@ fn run_benchmarks(tx: mpsc::Sender<bench::BenchResults>) {
 
 fn start_disk_test(app: &mut App, samples: usize, sample_size_mb: usize, mode: &str) {
     let device_name = app.disks.get(app.selected_disk).cloned().unwrap_or_default();
+    eprintln!("[DEBUG] Starting disk test for: {}", device_name);
+
     let all_devices = bench::disk::scan_disks();
+    eprintln!("[DEBUG] Found {} devices", all_devices.len());
+
     let device = match all_devices.iter().find(|d| d.name == device_name) {
         Some(d) => d.clone(),
-        None => return,
+        None => {
+            eprintln!("[DEBUG] Device {} not found in scan", device_name);
+            return;
+        }
     };
+
+    eprintln!("[DEBUG] Device path: {} (size: {} bytes)", device.path, device.size_bytes);
 
     let (tx, rx) = mpsc::channel();
     let cancel = app.cancel.clone();
     let mode = mode.to_string(); // Convert to owned String
 
     let handle = thread::spawn(move || {
+        eprintln!("[WORKER] Thread spawned for {}", device.name);
+
         let mut result = DiskBenchResult {
             device: device.name.clone(),
             ..Default::default()
@@ -207,9 +218,11 @@ fn start_disk_test(app: &mut App, samples: usize, sample_size_mb: usize, mode: &
             ..Default::default()
         });
 
+        eprintln!("[WORKER] Starting linear read test on {}", device.path);
         // Linear read benchmark
         match bench::disk::bench_linear_read(&device.path, samples, sample_size_mb) {
             Ok((data, avg, min, max)) => {
+                eprintln!("[WORKER] Linear read OK: {:.1} MB/s", avg);
                 result.linear_speed_mbs = data;
                 result.avg_linear_mbs = avg;
                 result.min_linear_mbs = min;
@@ -221,6 +234,7 @@ fn start_disk_test(app: &mut App, samples: usize, sample_size_mb: usize, mode: &
                 });
             }
             Err(e) => {
+                eprintln!("[WORKER] Linear read ERROR: {}", e);
                 let _ = tx.send(bench::BenchResults {
                     status: format!("Linear read error: {}", e),
                     ..Default::default()

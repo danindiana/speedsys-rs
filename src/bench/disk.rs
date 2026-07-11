@@ -76,12 +76,22 @@ pub fn bench_linear_read(
         .open(device_path)
         .map_err(|e| format!("Failed to open {}: {}", device_path, e))?;
 
-    let file_size = file.metadata()
-        .map_err(|e| format!("Failed to get metadata: {}", e))?
-        .len();
+    // For device files, metadata().len() returns 0, so read size from /sys/block
+    let file_size = if let Some(dev_name) = device_path.strip_prefix("/dev/") {
+        let size_path = format!("/sys/block/{}/size", dev_name);
+        std::fs::read_to_string(&size_path)
+            .ok()
+            .and_then(|s| s.trim().parse::<u64>().ok())
+            .map(|sectors| sectors * 512)
+            .unwrap_or(0)
+    } else {
+        file.metadata()
+            .map_err(|e| format!("Failed to get metadata: {}", e))?
+            .len()
+    };
 
-    if file_size < sample_bytes as u64 {
-        return Err(format!("Device too small for sample size"));
+    if file_size == 0 || file_size < sample_bytes as u64 {
+        return Err(format!("Device too small or unreadable (size: {} bytes, need: {} bytes)", file_size, sample_bytes));
     }
 
     let mut results = Vec::new();
@@ -134,9 +144,23 @@ pub fn bench_random_seek(
         .open(device_path)
         .map_err(|e| format!("Failed to open {}: {}", device_path, e))?;
 
-    let file_size = file.metadata()
-        .map_err(|e| format!("Failed to get metadata: {}", e))?
-        .len();
+    // For device files, metadata().len() returns 0, so read size from /sys/block
+    let file_size = if let Some(dev_name) = device_path.strip_prefix("/dev/") {
+        let size_path = format!("/sys/block/{}/size", dev_name);
+        std::fs::read_to_string(&size_path)
+            .ok()
+            .and_then(|s| s.trim().parse::<u64>().ok())
+            .map(|sectors| sectors * 512)
+            .unwrap_or(0)
+    } else {
+        file.metadata()
+            .map_err(|e| format!("Failed to get metadata: {}", e))?
+            .len()
+    };
+
+    if file_size == 0 {
+        return Err(format!("Cannot determine device size"));
+    }
 
     let mut latencies = Vec::new();
     let mut total: f64 = 0.0;
