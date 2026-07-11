@@ -134,6 +134,35 @@ pub fn render_test(f: &mut Frame, app: &App) {
         )));
     }
 
+    // Add progress bar if test is running
+    if let Some((curr, total, elapsed)) = app.current_progress {
+        lines.push(Line::from(""));
+
+        let pct = (curr as f64 / total as f64) * 100.0;
+        let bar_width: usize = 40;
+        let filled = ((curr as f64 / total as f64) * bar_width as f64) as usize;
+        let empty = bar_width.saturating_sub(filled);
+
+        let bar = format!("{}{}",
+            "█".repeat(filled),
+            "░".repeat(empty)
+        );
+
+        // Estimate time remaining
+        let est_total_time = if curr > 0 {
+            elapsed / (curr as f64 / total as f64)
+        } else {
+            0.0
+        };
+        let remaining_time = (est_total_time - elapsed).max(0.0);
+
+        lines.push(Line::from(Span::styled(
+            format!("{} {:.0}% (~{:.0}s remaining) [Esc to cancel]",
+                bar, pct, remaining_time),
+            Style::default().fg(Color::Cyan),
+        )));
+    }
+
     // Add status bar at the bottom
     lines.push(Line::from(""));
     let status_color = if app.bench_results.status.contains("error") || app.bench_results.status.contains("Error") {

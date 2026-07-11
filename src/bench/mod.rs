@@ -12,6 +12,7 @@ pub enum BenchMsg {
     CpuDone(f64),                          // Mops/s
     SweepPoint(f64, f64),                 // (log2 KB, MB/s)
     DiskUpdate(DiskBenchResult),          // Partial or complete disk result
+    Progress(usize, usize, f64),          // (current_sample, total_samples, elapsed_secs)
 }
 
 #[derive(Clone, Debug, Default)]

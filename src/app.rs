@@ -25,6 +25,7 @@ pub struct App {
     pub worker: Option<JoinHandle<()>>,
     pub cancel: Arc<AtomicBool>,
     pub disk_test_rx: Option<mpsc::Receiver<crate::bench::BenchMsg>>,
+    pub current_progress: Option<(usize, usize, f64)>, // (current, total, elapsed_secs)
 }
 
 impl App {
@@ -44,6 +45,7 @@ impl App {
             worker: None,
             cancel: Arc::new(AtomicBool::new(false)),
             disk_test_rx: None,
+            current_progress: None,
         }
     }
 

@@ -55,6 +55,9 @@ fn main() -> io::Result<()> {
                     BenchMsg::DiskUpdate(result) => {
                         app.disk_results.insert(result.device.clone(), result);
                     }
+                    BenchMsg::Progress(curr, total, elapsed) => {
+                        app.current_progress = Some((curr, total, elapsed));
+                    }
                     _ => {}
                 }
             }
@@ -255,10 +258,11 @@ fn start_disk_test(app: &mut App, samples: usize, sample_size_mb: usize) {
             ..Default::default()
         };
 
+        let test_start = std::time::Instant::now();
         let _ = tx.send(BenchMsg::Status(format!("Linear read on {}...", device.name)));
 
-        // Linear read with cancellation
-        match bench::disk::bench_linear_read(&device.path, samples, sample_size_mb, &cancel) {
+        // Linear read with cancellation and progress
+        match bench::disk::bench_linear_read(&device.path, samples, sample_size_mb, &cancel, Some(&tx), test_start) {
             Ok((data, avg, min, max)) => {
                 result.linear_speed_mbs = data;
                 result.avg_linear_mbs = avg;
@@ -278,9 +282,9 @@ fn start_disk_test(app: &mut App, samples: usize, sample_size_mb: usize) {
 
         let _ = tx.send(BenchMsg::Status(format!("Random seek on {}...", device.name)));
 
-        // Random seek with cancellation
+        // Random seek with cancellation and progress
         let seek_samples = 200; // Quick test default
-        match bench::disk::bench_random_seek(&device.path, seek_samples, &cancel) {
+        match bench::disk::bench_random_seek(&device.path, seek_samples, &cancel, Some(&tx), test_start) {
             Ok((latencies, avg, max)) => {
                 result.seek_times_ms = latencies;
                 result.avg_seek_ms = avg;

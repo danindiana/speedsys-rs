@@ -2,6 +2,7 @@ use std::fs::File;
 use std::hint::black_box;
 use std::io::{Read, Seek, SeekFrom};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::time::Instant;
 
 #[derive(Clone, Debug)]
@@ -139,6 +140,8 @@ pub fn bench_linear_read(
     samples: usize,
     sample_size_mb: usize,
     cancel: &AtomicBool,
+    tx: Option<&mpsc::Sender<crate::bench::BenchMsg>>,
+    start_time: std::time::Instant,
 ) -> Result<(Vec<(f64, f64)>, f64, f64, f64), String> {
     let sample_bytes = sample_size_mb * 1024 * 1024;
     let mut file = std::fs::File::open(device_path)
@@ -168,6 +171,7 @@ pub fn bench_linear_read(
     let mut total_speed: f64 = 0.0;
     let mut min_speed: f64 = f64::INFINITY;
     let mut max_speed: f64 = 0.0;
+    let progress_interval = (samples / 10).max(1).min(50); // Update every 50 samples or 10%, whichever is less frequent
 
     for i in 0..samples {
         // Check cancellation
@@ -199,6 +203,14 @@ pub fn bench_linear_read(
             max_speed = max_speed.max(speed_mbs);
             results.push((position_pct, speed_mbs));
         }
+
+        // Send progress update periodically
+        if (i + 1) % progress_interval == 0 {
+            if let Some(tx) = tx {
+                let elapsed_secs = start_time.elapsed().as_secs_f64();
+                let _ = tx.send(crate::bench::BenchMsg::Progress(i + 1, samples, elapsed_secs));
+            }
+        }
     }
 
     let count = results.len().max(1) as f64;
@@ -210,6 +222,8 @@ pub fn bench_random_seek(
     device_path: &str,
     num_seeks: usize,
     cancel: &AtomicBool,
+    tx: Option<&mpsc::Sender<crate::bench::BenchMsg>>,
+    start_time: std::time::Instant,
 ) -> Result<(Vec<f64>, f64, f64), String> {
     let mut file = std::fs::File::open(device_path)
         .map_err(|e| format!("Failed to open {}: {}", device_path, e))?;
@@ -234,11 +248,12 @@ pub fn bench_random_seek(
     let mut latencies = Vec::new();
     let mut total: f64 = 0.0;
     let mut max_latency: f64 = 0.0;
+    let progress_interval = (num_seeks / 10).max(1).min(20); // Update every 20 seeks or 10%
 
     use rand::Rng;
     let mut rng = rand::thread_rng();
 
-    for _ in 0..num_seeks {
+    for i in 0..num_seeks {
         // Check cancellation
         if cancel.load(Ordering::Relaxed) {
             let avg = if latencies.is_empty() { 0.0 } else { total / latencies.len() as f64 };
@@ -260,6 +275,14 @@ pub fn bench_random_seek(
         total += latency_ms;
         max_latency = max_latency.max(latency_ms);
         latencies.push(latency_ms);
+
+        // Send progress update periodically
+        if (i + 1) % progress_interval == 0 {
+            if let Some(tx) = tx {
+                let elapsed_secs = start_time.elapsed().as_secs_f64();
+                let _ = tx.send(crate::bench::BenchMsg::Progress(i + 1, num_seeks, elapsed_secs));
+            }
+        }
     }
 
     let avg_latency = if latencies.is_empty() { 0.0 } else { total / latencies.len() as f64 };
