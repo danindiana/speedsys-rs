@@ -301,11 +301,13 @@ fn test_mode(sys: &sysinfo::SysInfo, samples: usize, sample_size_mb: usize, sele
                 let _ = disk_tx.send(BenchMsg::Status(format!("Testing disk {}...", disk_path)));
 
                 match bench::disk::bench_linear_read(&disk_path, samples, sample_size_mb, &cancel_clone, Some(&disk_tx), test_start) {
-                    Ok((data, avg, min, max)) => {
-                        result.linear_speed_mbs = data;
-                        result.avg_linear_mbs = avg;
-                        result.min_linear_mbs = min;
-                        result.max_linear_mbs = max;
+                    Ok(linear_result) => {
+                        result.linear_speed_mbs = linear_result.speeds;
+                        result.avg_linear_mbs = linear_result.avg;
+                        result.min_linear_mbs = linear_result.min;
+                        result.max_linear_mbs = linear_result.max;
+                        result.read_errors = linear_result.errors;
+                        result.cache_bypass_mode = linear_result.cache_bypass_mode;
                         let _ = disk_tx.send(BenchMsg::DiskUpdate(result.clone()));
                     }
                     Err(e) => {
@@ -315,10 +317,11 @@ fn test_mode(sys: &sysinfo::SysInfo, samples: usize, sample_size_mb: usize, sele
                 }
 
                 match bench::disk::bench_random_seek(&disk_path, 200, &cancel_clone, Some(&disk_tx), test_start) {
-                    Ok((latencies, avg, max)) => {
-                        result.seek_times_ms = latencies;
-                        result.avg_seek_ms = avg;
-                        result.max_seek_ms = max;
+                    Ok(seek_result) => {
+                        result.seek_times_ms = seek_result.latencies;
+                        result.avg_seek_ms = seek_result.avg;
+                        result.max_seek_ms = seek_result.max;
+                        result.read_errors.extend(seek_result.errors.into_iter().map(|e| (0.0, e)));
                     }
                     Err(e) => {
                         let _ = disk_tx.send(BenchMsg::Status(format!("Seek error: {}", e)));
@@ -441,11 +444,13 @@ fn start_disk_test(app: &mut App, samples: usize, sample_size_mb: usize) {
 
         // Linear read with cancellation and progress
         match bench::disk::bench_linear_read(&device.path, samples, sample_size_mb, &cancel, Some(&tx), test_start) {
-            Ok((data, avg, min, max)) => {
-                result.linear_speed_mbs = data;
-                result.avg_linear_mbs = avg;
-                result.min_linear_mbs = min;
-                result.max_linear_mbs = max;
+            Ok(linear_result) => {
+                result.linear_speed_mbs = linear_result.speeds;
+                result.avg_linear_mbs = linear_result.avg;
+                result.min_linear_mbs = linear_result.min;
+                result.max_linear_mbs = linear_result.max;
+                result.read_errors = linear_result.errors;
+                result.cache_bypass_mode = linear_result.cache_bypass_mode;
                 let _ = tx.send(BenchMsg::DiskUpdate(result.clone()));
             }
             Err(e) => {
@@ -463,10 +468,11 @@ fn start_disk_test(app: &mut App, samples: usize, sample_size_mb: usize) {
         // Random seek with cancellation and progress
         let seek_samples = 200; // Quick test default
         match bench::disk::bench_random_seek(&device.path, seek_samples, &cancel, Some(&tx), test_start) {
-            Ok((latencies, avg, max)) => {
-                result.seek_times_ms = latencies;
-                result.avg_seek_ms = avg;
-                result.max_seek_ms = max;
+            Ok(seek_result) => {
+                result.seek_times_ms = seek_result.latencies;
+                result.avg_seek_ms = seek_result.avg;
+                result.max_seek_ms = seek_result.max;
+                result.read_errors.extend(seek_result.errors.into_iter().map(|e| (0.0, e)));
             }
             Err(e) => {
                 let _ = tx.send(BenchMsg::Status(format!("Seek test error: {}", e)));

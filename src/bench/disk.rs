@@ -1,5 +1,6 @@
+use std::alloc::Layout;
 use std::hint::black_box;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom, Error as IoError, ErrorKind};
 use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -7,6 +8,46 @@ use std::sync::OnceLock;
 use std::time::Instant;
 
 static DEVICE_CACHE: OnceLock<Vec<DiskDevice>> = OnceLock::new();
+
+/// RAII wrapper for 4096-byte aligned buffer (required for O_DIRECT).
+struct AlignedBuf {
+    ptr: *mut u8,
+    size: usize,
+}
+
+impl AlignedBuf {
+    fn new(size: usize) -> Result<Self, IoError> {
+        // Round up to nearest multiple of 4096
+        let aligned_size = ((size + 4095) / 4096) * 4096;
+        let layout = Layout::from_size_align(aligned_size, 4096)
+            .map_err(|_| IoError::new(ErrorKind::Other, "Failed to create aligned layout"))?;
+
+        let ptr = unsafe { std::alloc::alloc(layout) };
+        if ptr.is_null() {
+            return Err(IoError::new(ErrorKind::Other, "Failed to allocate aligned memory"));
+        }
+        Ok(AlignedBuf {
+            ptr,
+            size: aligned_size,
+        })
+    }
+
+    fn as_mut_slice(&mut self) -> &mut [u8] {
+        unsafe { std::slice::from_raw_parts_mut(self.ptr, self.size) }
+    }
+
+    fn layout(&self) -> Layout {
+        Layout::from_size_align(self.size, 4096).unwrap()
+    }
+}
+
+impl Drop for AlignedBuf {
+    fn drop(&mut self) {
+        unsafe {
+            std::alloc::dealloc(self.ptr, self.layout());
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct DiskDevice {
@@ -17,8 +58,16 @@ pub struct DiskDevice {
     pub is_rotational: bool,
 }
 
-// Type alias for linear read benchmark results: (position_percent, speed_mbs_list, avg, min, max)
-type LinearReadResult = (Vec<(f64, f64)>, f64, f64, f64);
+// Linear read benchmark results including error tracking
+#[derive(Debug)]
+pub struct LinearReadResult {
+    pub speeds: Vec<(f64, f64)>,                   // (position %, MB/s)
+    pub errors: Vec<(f64, String)>,                // (position %, error description)
+    pub avg: f64,
+    pub min: f64,
+    pub max: f64,
+    pub cache_bypass_mode: String,                 // "O_DIRECT" or "buffered (FADV_DONTNEED)"
+}
 
 /// List all block devices from /sys/block (cached after first call).
 /// Devices don't hotplug during a benchmark session, so caching is safe.
@@ -146,7 +195,8 @@ enum DevicePart {
     Num(u64),
 }
 
-/// Linear read speed: sample K evenly spaced offsets, return (position%, MB/s) tuples.
+/// Linear read speed: sample K evenly spaced offsets with O_DIRECT cache bypass + error tracking.
+/// Falls back to buffered I/O with POSIX_FADV_DONTNEED if O_DIRECT unavailable (e.g., md/dm devices).
 pub fn bench_linear_read(
     device_path: &str,
     samples: usize,
@@ -156,18 +206,6 @@ pub fn bench_linear_read(
     start_time: std::time::Instant,
 ) -> Result<LinearReadResult, String> {
     let sample_bytes = sample_size_mb * 1024 * 1024;
-    let mut file = std::fs::File::open(device_path)
-        .map_err(|e| format!("Failed to open {}: {}", device_path, e))?;
-
-    // Enable read-ahead for sequential access pattern
-    unsafe {
-        let _ = libc::posix_fadvise(
-            file.as_raw_fd(),
-            0,
-            0, // whole file
-            libc::POSIX_FADV_SEQUENTIAL,
-        );
-    }
 
     // Read device size from /sys/block
     let file_size = if let Some(dev_name) = device_path.strip_prefix("/dev/") {
@@ -188,42 +226,82 @@ pub fn bench_linear_read(
         ));
     }
 
-    let mut buf = vec![0u8; sample_bytes];
+    // Try O_DIRECT first for true cache bypass
+    match try_open_direct(device_path) {
+        Ok(file) => bench_linear_read_direct(file, device_path, samples, sample_size_mb, sample_bytes, file_size, cancel, tx, start_time),
+        Err(_) => {
+            // Fallback to buffered I/O with POSIX_FADV_DONTNEED
+            bench_linear_read_buffered(device_path, samples, sample_size_mb, sample_bytes, file_size, cancel, tx, start_time)
+        }
+    }
+}
+
+/// Open file with O_DIRECT flag.
+fn try_open_direct(path: &str) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECT)
+        .open(path)
+}
+
+/// O_DIRECT version: true cache bypass with aligned buffers.
+fn bench_linear_read_direct(
+    mut file: std::fs::File,
+    device_path: &str,
+    samples: usize,
+    sample_size_mb: usize,
+    sample_bytes: usize,
+    file_size: u64,
+    cancel: &AtomicBool,
+    tx: Option<&mpsc::Sender<crate::bench::BenchMsg>>,
+    start_time: std::time::Instant,
+) -> Result<LinearReadResult, String> {
     let mut results = Vec::new();
+    let mut errors = Vec::new();
     let mut total_speed: f64 = 0.0;
     let mut min_speed: f64 = f64::INFINITY;
     let mut max_speed: f64 = 0.0;
-    let progress_interval = (samples / 10).clamp(1, 50); // Update every 50 samples or 10%, whichever is less frequent
+    let progress_interval = (samples / 10).clamp(1, 50);
+
+    // Allocate aligned buffer for O_DIRECT
+    let mut buf = AlignedBuf::new(sample_bytes)
+        .map_err(|e| format!("Failed to allocate aligned buffer: {}", e))?;
 
     for i in 0..samples {
-        // Check cancellation
         if cancel.load(Ordering::Relaxed) {
-            return Ok((results, total_speed / (i as f64).max(1.0), min_speed, max_speed));
+            break;
         }
 
         let pos = ((i as u64) * file_size) / samples as u64;
         let position_pct = (pos as f64 / file_size as f64) * 100.0;
 
-        file.seek(SeekFrom::Start(pos))
-            .map_err(|e| format!("Seek failed: {}", e))?;
-
-        // Time the read of exactly sample_bytes
-        let read_start = Instant::now();
-        let bytes_read = file.read(&mut buf).unwrap_or_default();
-
-        black_box(&buf);
-        let elapsed = read_start.elapsed().as_secs_f64();
-
-        // Only count samples that read the full size
-        if bytes_read == sample_bytes && elapsed > 0.0 {
-            let speed_mbs = (sample_bytes as f64) / elapsed / 1e6;
-            total_speed += speed_mbs;
-            min_speed = min_speed.min(speed_mbs);
-            max_speed = max_speed.max(speed_mbs);
-            results.push((position_pct, speed_mbs));
+        if let Err(e) = file.seek(SeekFrom::Start(pos)) {
+            errors.push((position_pct, format!("Seek: {}", e)));
+            continue;
         }
 
-        // Send progress update periodically
+        let read_start = Instant::now();
+        match file.read(buf.as_mut_slice()) {
+            Ok(bytes_read) => {
+                black_box(buf.as_mut_slice());
+                let elapsed = read_start.elapsed().as_secs_f64();
+
+                if bytes_read == sample_bytes && elapsed > 0.0 {
+                    let speed_mbs = (sample_bytes as f64) / elapsed / 1e6;
+                    total_speed += speed_mbs;
+                    min_speed = min_speed.min(speed_mbs);
+                    max_speed = max_speed.max(speed_mbs);
+                    results.push((position_pct, speed_mbs));
+                } else if bytes_read < sample_bytes {
+                    errors.push((position_pct, format!("Short read: {} of {} bytes", bytes_read, sample_bytes)));
+                }
+            }
+            Err(e) => {
+                errors.push((position_pct, format!("Read error: {}", e)));
+            }
+        }
+
         if (i + 1) % progress_interval == 0 {
             if let Some(tx) = tx {
                 let elapsed_secs = start_time.elapsed().as_secs_f64();
@@ -233,29 +311,223 @@ pub fn bench_linear_read(
     }
 
     let count = results.len().max(1) as f64;
-    Ok((results, total_speed / count, min_speed, max_speed))
+    Ok(LinearReadResult {
+        speeds: results,
+        errors,
+        avg: total_speed / count,
+        min: min_speed,
+        max: max_speed,
+        cache_bypass_mode: "O_DIRECT".to_string(),
+    })
 }
 
-/// Random seek/access time: K random 4KB reads, return latencies in ms.
+/// Buffered version with POSIX_FADV_DONTNEED for each read.
+fn bench_linear_read_buffered(
+    device_path: &str,
+    samples: usize,
+    sample_size_mb: usize,
+    sample_bytes: usize,
+    file_size: u64,
+    cancel: &AtomicBool,
+    tx: Option<&mpsc::Sender<crate::bench::BenchMsg>>,
+    start_time: std::time::Instant,
+) -> Result<LinearReadResult, String> {
+    let mut file = std::fs::File::open(device_path)
+        .map_err(|e| format!("Failed to open {}: {}", device_path, e))?;
+
+    let mut results = Vec::new();
+    let mut errors = Vec::new();
+    let mut total_speed: f64 = 0.0;
+    let mut min_speed: f64 = f64::INFINITY;
+    let mut max_speed: f64 = 0.0;
+    let progress_interval = (samples / 10).clamp(1, 50);
+
+    let mut buf = vec![0u8; sample_bytes];
+
+    for i in 0..samples {
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
+
+        let pos = ((i as u64) * file_size) / samples as u64;
+        let position_pct = (pos as f64 / file_size as f64) * 100.0;
+
+        if let Err(e) = file.seek(SeekFrom::Start(pos)) {
+            errors.push((position_pct, format!("Seek: {}", e)));
+            continue;
+        }
+
+        // Discard from cache immediately after read to prevent cache effects
+        unsafe {
+            let _ = libc::posix_fadvise(
+                file.as_raw_fd(),
+                pos as i64,
+                sample_bytes as i64,
+                libc::POSIX_FADV_DONTNEED,
+            );
+        }
+
+        let read_start = Instant::now();
+        match file.read(&mut buf) {
+            Ok(bytes_read) => {
+                black_box(&buf);
+                let elapsed = read_start.elapsed().as_secs_f64();
+
+                if bytes_read == sample_bytes && elapsed > 0.0 {
+                    let speed_mbs = (sample_bytes as f64) / elapsed / 1e6;
+                    total_speed += speed_mbs;
+                    min_speed = min_speed.min(speed_mbs);
+                    max_speed = max_speed.max(speed_mbs);
+                    results.push((position_pct, speed_mbs));
+                } else if bytes_read < sample_bytes {
+                    errors.push((position_pct, format!("Short read: {} of {} bytes", bytes_read, sample_bytes)));
+                }
+            }
+            Err(e) => {
+                errors.push((position_pct, format!("Read error: {}", e)));
+            }
+        }
+
+        if (i + 1) % progress_interval == 0 {
+            if let Some(tx) = tx {
+                let elapsed_secs = start_time.elapsed().as_secs_f64();
+                let _ = tx.send(crate::bench::BenchMsg::Progress(i + 1, samples, elapsed_secs));
+            }
+        }
+    }
+
+    let count = results.len().max(1) as f64;
+    Ok(LinearReadResult {
+        speeds: results,
+        errors,
+        avg: total_speed / count,
+        min: min_speed,
+        max: max_speed,
+        cache_bypass_mode: "buffered (FADV_DONTNEED)".to_string(),
+    })
+}
+
+/// Random seek/access time: K random 4KB reads with error tracking.
 pub fn bench_random_seek(
     device_path: &str,
     num_seeks: usize,
     cancel: &AtomicBool,
     tx: Option<&mpsc::Sender<crate::bench::BenchMsg>>,
     start_time: std::time::Instant,
-) -> Result<(Vec<f64>, f64, f64), String> {
+) -> Result<RandomSeekResult, String> {
+    // Try O_DIRECT first
+    match try_open_direct(device_path) {
+        Ok(file) => bench_random_seek_direct(file, device_path, num_seeks, cancel, tx, start_time),
+        Err(_) => bench_random_seek_buffered(device_path, num_seeks, cancel, tx, start_time),
+    }
+}
+
+#[derive(Debug)]
+pub struct RandomSeekResult {
+    pub latencies: Vec<f64>,
+    pub errors: Vec<String>,
+    pub avg: f64,
+    pub max: f64,
+    pub cache_bypass_mode: String,
+}
+
+/// O_DIRECT version for random seek.
+fn bench_random_seek_direct(
+    mut file: std::fs::File,
+    device_path: &str,
+    num_seeks: usize,
+    cancel: &AtomicBool,
+    tx: Option<&mpsc::Sender<crate::bench::BenchMsg>>,
+    start_time: std::time::Instant,
+) -> Result<RandomSeekResult, String> {
+    // Read device size from /sys/block
+    let file_size = if let Some(dev_name) = device_path.strip_prefix("/dev/") {
+        let size_path = format!("/sys/block/{}/size", dev_name);
+        std::fs::read_to_string(&size_path)
+            .ok()
+            .and_then(|s| s.trim().parse::<u64>().ok())
+            .map(|sectors| sectors * 512)
+            .unwrap_or(0)
+    } else {
+        0
+    };
+
+    if file_size == 0 || file_size < 4096 {
+        return Err("Device too small for seek test".to_string());
+    }
+
+    let mut latencies = Vec::new();
+    let mut errors = Vec::new();
+    let mut total: f64 = 0.0;
+    let mut max_latency: f64 = 0.0;
+    let progress_interval = (num_seeks / 10).clamp(1, 20);
+
+    let mut buf = AlignedBuf::new(4096)
+        .map_err(|e| format!("Failed to allocate aligned buffer: {}", e))?;
+
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+
+    for i in 0..num_seeks {
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
+
+        let max_offset = file_size.saturating_sub(4096);
+        let offset = (rng.gen::<u64>() % (max_offset + 1)) & !0xFFF;
+
+        if let Err(e) = file.seek(SeekFrom::Start(offset)) {
+            errors.push(format!("Seek error: {}", e));
+            continue;
+        }
+
+        let read_start = Instant::now();
+        match file.read(buf.as_mut_slice()) {
+            Ok(bytes_read) => {
+                black_box(buf.as_mut_slice());
+                let latency_ms = read_start.elapsed().as_secs_f64() * 1000.0;
+
+                if bytes_read == 4096 {
+                    total += latency_ms;
+                    max_latency = max_latency.max(latency_ms);
+                    latencies.push(latency_ms);
+                } else {
+                    errors.push(format!("Short read: {} bytes", bytes_read));
+                }
+            }
+            Err(e) => {
+                errors.push(format!("Read error: {}", e));
+            }
+        }
+
+        if (i + 1) % progress_interval == 0 {
+            if let Some(tx) = tx {
+                let elapsed_secs = start_time.elapsed().as_secs_f64();
+                let _ = tx.send(crate::bench::BenchMsg::Progress(i + 1, num_seeks, elapsed_secs));
+            }
+        }
+    }
+
+    let avg_latency = if latencies.is_empty() { 0.0 } else { total / latencies.len() as f64 };
+    Ok(RandomSeekResult {
+        latencies,
+        errors,
+        avg: avg_latency,
+        max: max_latency,
+        cache_bypass_mode: "O_DIRECT".to_string(),
+    })
+}
+
+/// Buffered version for random seek.
+fn bench_random_seek_buffered(
+    device_path: &str,
+    num_seeks: usize,
+    cancel: &AtomicBool,
+    tx: Option<&mpsc::Sender<crate::bench::BenchMsg>>,
+    start_time: std::time::Instant,
+) -> Result<RandomSeekResult, String> {
     let mut file = std::fs::File::open(device_path)
         .map_err(|e| format!("Failed to open {}: {}", device_path, e))?;
-
-    // Enable read-ahead for random access (kernel will use smaller read-ahead)
-    unsafe {
-        let _ = libc::posix_fadvise(
-            file.as_raw_fd(),
-            0,
-            0, // whole file
-            libc::POSIX_FADV_RANDOM,
-        );
-    }
 
     // Read device size from /sys/block
     let file_size = if let Some(dev_name) = device_path.strip_prefix("/dev/") {
@@ -273,39 +545,59 @@ pub fn bench_random_seek(
         return Err("Device too small for seek test".to_string());
     }
 
-    let mut buf = [0u8; 4096];
     let mut latencies = Vec::new();
+    let mut errors = Vec::new();
     let mut total: f64 = 0.0;
     let mut max_latency: f64 = 0.0;
-    let progress_interval = (num_seeks / 10).clamp(1, 20); // Update every 20 seeks or 10%
+    let progress_interval = (num_seeks / 10).clamp(1, 20);
+
+    let mut buf = [0u8; 4096];
 
     use rand::Rng;
     let mut rng = rand::thread_rng();
 
     for i in 0..num_seeks {
-        // Check cancellation
         if cancel.load(Ordering::Relaxed) {
-            let avg = if latencies.is_empty() { 0.0 } else { total / latencies.len() as f64 };
-            return Ok((latencies, avg, max_latency));
+            break;
         }
 
         let max_offset = file_size.saturating_sub(4096);
-        let offset = (rng.gen::<u64>() % (max_offset + 1)) & !0xFFF; // Align to 4KB
+        let offset = (rng.gen::<u64>() % (max_offset + 1)) & !0xFFF;
 
-        file.seek(SeekFrom::Start(offset))
-            .map_err(|e| format!("Seek failed: {}", e))?;
+        if let Err(e) = file.seek(SeekFrom::Start(offset)) {
+            errors.push(format!("Seek error: {}", e));
+            continue;
+        }
 
-        let _start = Instant::now();
-        let _ = file.read(&mut buf);
-        let latency_ms = _start.elapsed().as_secs_f64() * 1000.0;
+        // Discard cache for this seek
+        unsafe {
+            let _ = libc::posix_fadvise(
+                file.as_raw_fd(),
+                offset as i64,
+                4096,
+                libc::POSIX_FADV_DONTNEED,
+            );
+        }
 
-        black_box(&buf);
+        let read_start = Instant::now();
+        match file.read(&mut buf) {
+            Ok(bytes_read) => {
+                black_box(&buf);
+                let latency_ms = read_start.elapsed().as_secs_f64() * 1000.0;
 
-        total += latency_ms;
-        max_latency = max_latency.max(latency_ms);
-        latencies.push(latency_ms);
+                if bytes_read == 4096 {
+                    total += latency_ms;
+                    max_latency = max_latency.max(latency_ms);
+                    latencies.push(latency_ms);
+                } else {
+                    errors.push(format!("Short read: {} bytes", bytes_read));
+                }
+            }
+            Err(e) => {
+                errors.push(format!("Read error: {}", e));
+            }
+        }
 
-        // Send progress update periodically
         if (i + 1) % progress_interval == 0 {
             if let Some(tx) = tx {
                 let elapsed_secs = start_time.elapsed().as_secs_f64();
@@ -315,7 +607,13 @@ pub fn bench_random_seek(
     }
 
     let avg_latency = if latencies.is_empty() { 0.0 } else { total / latencies.len() as f64 };
-    Ok((latencies, avg_latency, max_latency))
+    Ok(RandomSeekResult {
+        latencies,
+        errors,
+        avg: avg_latency,
+        max: max_latency,
+        cache_bypass_mode: "buffered (FADV_DONTNEED)".to_string(),
+    })
 }
 
 #[derive(Clone, Debug, Default)]

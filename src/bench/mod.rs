@@ -37,4 +37,8 @@ pub struct DiskBenchResult {
     pub smart_hours: Option<u64>,
     #[allow(dead_code)]
     pub smart_sectors: Option<u64>,
+    // I/O error tracking (item B from roadmap)
+    pub read_errors: Vec<(f64, String)>, // (position %, error description)
+    pub error_count: usize,
+    pub cache_bypass_mode: String, // "O_DIRECT" or "buffered (FADV_DONTNEED)"
 }
