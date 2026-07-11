@@ -9,6 +9,11 @@ A modern Rust port of the classic DOS benchmark **SYSTEM SPEED TEST 4.78** by Vl
 [![GitHub](https://img.shields.io/badge/GitHub-danindiana%2Fspeedsys--rs-blue)](https://github.com/danindiana/speedsys-rs)
 [![Rust](https://img.shields.io/badge/Rust-1.74%2B-orange)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
+[![Tests](https://img.shields.io/badge/Tests-16%2F16%20passing-brightgreen)](tests/)
+[![Build](https://img.shields.io/badge/Build-Linux%20x86__64-darkblue)](.)
+[![Clippy](https://img.shields.io/badge/Clippy-0%20warnings-success)](.)
+[![Status](https://img.shields.io/badge/Status-Stable-success)](.)
+[![Maintenance](https://img.shields.io/badge/Maintenance-Active-green)](https://github.com/danindiana/speedsys-rs/commits/master)
 
 </div>
 
@@ -61,6 +66,21 @@ A modern Rust port of the classic DOS benchmark **SYSTEM SPEED TEST 4.78** by Vl
 - **Graceful errors**: Permission denied → shows hint; no disks → suggests checks in troubleshooting
 - **Conditional rendering**: `App::needs_render()` skips TUI redraws when state unchanged (Phase 9 optimization)
 - **Golden regression tests**: 16 integration tests covering CLI parsing, output formats, benchmark validity (Phase 8)
+
+---
+
+## Table of Contents
+
+- [Features](#features)
+- [Quick Start](#quick-start) · [Usage](#usage)
+- [Screenshots](#screenshots)
+- [Architecture](#architecture) · [Disk Benchmarking](#disk-benchmarking)
+- [Troubleshooting](#troubleshooting)
+- [Performance](#performance-notes) · [Dependencies](#dependencies)
+- [Roadmap](#roadmap)
+- [Contributing](#contributing) · [License](#license)
+
+See also: [CONTRIBUTING.md](CONTRIBUTING.md) · [CHANGELOG.md](CHANGELOG.md)
 
 ---
 
@@ -294,6 +314,24 @@ Screenshots and diagrams in this README are reproducible and auto-generated from
 ```
 
 All visual assets stay synchronized with the actual code via automation.
+
+---
+
+## Contributing
+
+Found a bug? Want to add a feature? See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on:
+- Reporting issues
+- Submitting pull requests
+- Development setup
+- Code standards (clippy -D warnings enforced)
+
+Quick commands for developers:
+```bash
+cargo build --release      # Build optimized binary
+cargo test                 # Run all tests
+cargo clippy -- -D warnings # Lint (must pass)
+./scripts/render_diagrams.sh # Regenerate docs
+```
 
 ---
 
