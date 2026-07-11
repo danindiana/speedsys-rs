@@ -26,6 +26,7 @@ pub struct App {
     pub cancel: Arc<AtomicBool>,
     pub disk_test_rx: Option<mpsc::Receiver<crate::bench::BenchMsg>>,
     pub current_progress: Option<(usize, usize, f64)>, // (current, total, elapsed_secs)
+    last_render_status: String, // Track if anything changed since last render
 }
 
 impl App {
@@ -46,6 +47,7 @@ impl App {
             cancel: Arc::new(AtomicBool::new(false)),
             disk_test_rx: None,
             current_progress: None,
+            last_render_status: String::new(),
         }
     }
 
@@ -80,6 +82,25 @@ impl App {
     pub fn join_worker(&mut self) {
         if let Some(w) = self.worker.take() {
             let _ = w.join();
+        }
+    }
+
+    /// Check if state has changed since last render (for conditional redraw).
+    /// Returns true if render is needed.
+    pub fn needs_render(&mut self) -> bool {
+        let current_status = format!(
+            "{}:{}:{}:{}",
+            self.bench_results.status,
+            self.current_progress.is_some(),
+            self.disk_results.len(),
+            self.selected_disk
+        );
+
+        if current_status != self.last_render_status {
+            self.last_render_status = current_status;
+            true
+        } else {
+            false
         }
     }
 }

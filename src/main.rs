@@ -89,10 +89,12 @@ fn tui_mode(sys: &sysinfo::SysInfo) -> io::Result<()> {
             }
         }
 
-        // Draw current screen
-        term.draw(|f| {
-            ui::render_screen(f, &app);
-        })?;
+        // Draw current screen (skip if nothing changed, improves responsiveness)
+        if app.needs_render() {
+            term.draw(|f| {
+                ui::render_screen(f, &app);
+            })?;
+        }
 
         // Handle input with screen-contextual semantics
         if event::poll(Duration::from_millis(100))? {

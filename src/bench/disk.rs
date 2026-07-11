@@ -1,8 +1,12 @@
 use std::hint::black_box;
 use std::io::{Read, Seek, SeekFrom};
+use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
+use std::sync::OnceLock;
 use std::time::Instant;
+
+static DEVICE_CACHE: OnceLock<Vec<DiskDevice>> = OnceLock::new();
 
 #[derive(Clone, Debug)]
 pub struct DiskDevice {
@@ -16,8 +20,16 @@ pub struct DiskDevice {
 // Type alias for linear read benchmark results: (position_percent, speed_mbs_list, avg, min, max)
 type LinearReadResult = (Vec<(f64, f64)>, f64, f64, f64);
 
-/// List all block devices from /sys/block (skip loop, ram, zram; >= 1MB).
+/// List all block devices from /sys/block (cached after first call).
+/// Devices don't hotplug during a benchmark session, so caching is safe.
 pub fn scan_disks() -> Vec<DiskDevice> {
+    DEVICE_CACHE
+        .get_or_init(scan_disks_impl)
+        .clone()
+}
+
+/// Internal implementation: scan /sys/block for block devices.
+fn scan_disks_impl() -> Vec<DiskDevice> {
     let mut devices = Vec::new();
     if let Ok(dir) = std::fs::read_dir("/sys/block") {
         for entry in dir.filter_map(|e| e.ok()) {
@@ -147,6 +159,16 @@ pub fn bench_linear_read(
     let mut file = std::fs::File::open(device_path)
         .map_err(|e| format!("Failed to open {}: {}", device_path, e))?;
 
+    // Enable read-ahead for sequential access pattern
+    unsafe {
+        let _ = libc::posix_fadvise(
+            file.as_raw_fd(),
+            0,
+            0, // whole file
+            libc::POSIX_FADV_SEQUENTIAL,
+        );
+    }
+
     // Read device size from /sys/block
     let file_size = if let Some(dev_name) = device_path.strip_prefix("/dev/") {
         let size_path = format!("/sys/block/{}/size", dev_name);
@@ -224,6 +246,16 @@ pub fn bench_random_seek(
 ) -> Result<(Vec<f64>, f64, f64), String> {
     let mut file = std::fs::File::open(device_path)
         .map_err(|e| format!("Failed to open {}: {}", device_path, e))?;
+
+    // Enable read-ahead for random access (kernel will use smaller read-ahead)
+    unsafe {
+        let _ = libc::posix_fadvise(
+            file.as_raw_fd(),
+            0,
+            0, // whole file
+            libc::POSIX_FADV_RANDOM,
+        );
+    }
 
     // Read device size from /sys/block
     let file_size = if let Some(dev_name) = device_path.strip_prefix("/dev/") {
