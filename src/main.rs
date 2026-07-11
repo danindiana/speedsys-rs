@@ -3,6 +3,7 @@ mod bench;
 mod app;
 mod ui;
 mod report;
+mod cli;
 
 use app::{App, Screen};
 use bench::{BenchMsg, DiskBenchResult};
@@ -12,42 +13,49 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
-use std::io;
+use std::io::{self, Write};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
 fn main() -> io::Result<()> {
     let sys = sysinfo::gather();
-    let args: Vec<String> = std::env::args().collect();
+    let args = cli::Args::parse_cli();
 
-    if args.iter().any(|a| a == "--dump") {
+    // Handle --list-disks mode
+    if args.list_disks {
+        cli::print_disks();
+        return Ok(());
+    }
+
+    // Handle --dump mode
+    if args.dump {
         return dump_mode(&sys);
     }
 
-    // Handle report export (requires running a benchmark first)
-    if let Some(idx) = args.iter().position(|a| a == "--report") {
-        if idx + 1 < args.len() {
-            return export_report(&sys, &args[idx + 1], "json");
-        }
-    }
-    if let Some(idx) = args.iter().position(|a| a == "--report-html") {
-        if idx + 1 < args.len() {
-            return export_report(&sys, &args[idx + 1], "html");
-        }
-    }
-    if let Some(idx) = args.iter().position(|a| a == "--report-csv") {
-        if idx + 1 < args.len() {
-            return export_report(&sys, &args[idx + 1], "csv");
-        }
+    // Handle --quick-test or --full-test modes (non-interactive)
+    if args.quick_test || args.full_test {
+        let is_quick = args.quick_test;
+        let (samples, sample_size) = if is_quick { (64, 8) } else { (512, 16) };
+        return test_mode(&sys, samples, sample_size, args.disk, &args);
     }
 
+    // Handle interactive TUI mode (default)
+    if args.should_show_tui() {
+        return tui_mode(&sys);
+    }
+
+    // Fallback: show TUI
+    tui_mode(&sys)
+}
+
+fn tui_mode(sys: &sysinfo::SysInfo) -> io::Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
     let mut term = Terminal::new(CrosstermBackend::new(stdout))?;
 
-    let mut app = App::new(sys);
+    let mut app = App::new(sys.clone());
 
     // Start background CPU/memory benchmarks
     let (tx, rx) = mpsc::channel();
@@ -224,6 +232,145 @@ fn dump_mode(sys: &sysinfo::SysInfo) -> io::Result<()> {
         }
         println!("{}", line.trim_end());
     }
+    Ok(())
+}
+
+fn test_mode(sys: &sysinfo::SysInfo, samples: usize, sample_size_mb: usize, selected_disk: Option<usize>, args: &cli::Args) -> io::Result<()> {
+    println!("Running benchmarks...\n");
+
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || run_benchmarks(tx));
+
+    let mut bench_results = bench::BenchResults::default();
+    let mut disk_results = std::collections::HashMap::new();
+
+    // Collect CPU/memory benchmarks
+    println!("CPU & Memory:");
+    while let Ok(msg) = rx.recv() {
+        match msg {
+            BenchMsg::Status(s) => {
+                bench_results.status = s.clone();
+                print!("  {}\r", s);
+                std::io::stdout().flush().ok();
+            }
+            BenchMsg::CpuDone(mops) => bench_results.cpu_mops = Some(mops),
+            BenchMsg::SweepPoint(log2kb, mbs) => bench_results.sweep.push((log2kb, mbs)),
+            _ => {}
+        }
+        if bench_results.status == "PASSED" {
+            println!("  ✓ CPU/Memory benchmarks completed");
+            break;
+        }
+    }
+
+    // Optional: run disk benchmarks if selected or all if in quick/full test mode
+    if !args.quick_test && !args.full_test {
+        println!("\nNo disk tests requested. Use -t1 or -t2 with --disk N for disk benchmarks.");
+    } else if let Some(disk_idx) = selected_disk {
+        // Test specific disk
+        let disks = bench::disk::scan_disks();
+        if disk_idx < disks.len() {
+            let disk = &disks[disk_idx];
+            println!("\nDisk Test ({}):", disk.name);
+            let (disk_tx, disk_rx) = mpsc::channel();
+            let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let disk_path = disk.path.clone();
+            let disk_name = disk.name.clone();
+            let cancel_clone = cancel.clone();
+
+            thread::spawn(move || {
+                let mut result = bench::DiskBenchResult {
+                    device: disk_name,
+                    ..Default::default()
+                };
+
+                let test_start = std::time::Instant::now();
+                let _ = disk_tx.send(BenchMsg::Status(format!("Testing disk {}...", disk_path)));
+
+                match bench::disk::bench_linear_read(&disk_path, samples, sample_size_mb, &cancel_clone, Some(&disk_tx), test_start) {
+                    Ok((data, avg, min, max)) => {
+                        result.linear_speed_mbs = data;
+                        result.avg_linear_mbs = avg;
+                        result.min_linear_mbs = min;
+                        result.max_linear_mbs = max;
+                        let _ = disk_tx.send(BenchMsg::DiskUpdate(result.clone()));
+                    }
+                    Err(e) => {
+                        let _ = disk_tx.send(BenchMsg::Status(format!("Error: {}", e)));
+                        return;
+                    }
+                }
+
+                match bench::disk::bench_random_seek(&disk_path, 200, &cancel_clone, Some(&disk_tx), test_start) {
+                    Ok((latencies, avg, max)) => {
+                        result.seek_times_ms = latencies;
+                        result.avg_seek_ms = avg;
+                        result.max_seek_ms = max;
+                    }
+                    Err(e) => {
+                        let _ = disk_tx.send(BenchMsg::Status(format!("Seek error: {}", e)));
+                        return;
+                    }
+                }
+
+                let _ = disk_tx.send(BenchMsg::DiskUpdate(result));
+                let _ = disk_tx.send(BenchMsg::Status("✓ Test complete".into()));
+            });
+
+            // Collect disk test results
+            while let Ok(msg) = disk_rx.recv() {
+                match msg {
+                    BenchMsg::Status(s) => {
+                        println!("  {}", s);
+                    }
+                    BenchMsg::DiskUpdate(result) => {
+                        disk_results.insert(result.device.clone(), result);
+                    }
+                    BenchMsg::Progress(curr, total, _elapsed) => {
+                        print!("  Progress: {}/{}\r", curr, total);
+                        std::io::stdout().flush().ok();
+                    }
+                    _ => {}
+                }
+            }
+            println!();
+        } else {
+            eprintln!("Error: Invalid disk index {}", disk_idx);
+            return Ok(());
+        }
+    }
+
+    // Export results if requested
+    if let Some((path, format)) = args.export_path() {
+        let rep = report::Report::new(sys.clone(), bench_results, disk_results);
+        match format {
+            "json" => {
+                rep.export_json(path).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+                println!("✓ Results exported to {} (JSON)", path);
+            }
+            "csv" => {
+                rep.export_csv(path).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+                println!("✓ Results exported to {} (CSV)", path);
+            }
+            "html" => {
+                rep.export_html(path).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+                println!("✓ Results exported to {} (HTML)", path);
+            }
+            _ => {}
+        }
+    } else {
+        // Print results to console
+        if let Some(mops) = bench_results.cpu_mops {
+            println!("\nResults:");
+            println!("  CPU: {:.1} MOPS", mops);
+        }
+        println!("  Memory: {} points measured", bench_results.sweep.len());
+        for (disk_name, result) in disk_results {
+            println!("  {}: {:.1} MB/s avg (linear), {:.2} ms avg (seek)",
+                disk_name, result.avg_linear_mbs, result.avg_seek_ms);
+        }
+    }
+
     Ok(())
 }
 
