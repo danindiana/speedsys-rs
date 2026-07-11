@@ -218,10 +218,10 @@ pub fn bench_linear_read(
         file.seek(SeekFrom::Start(pos))
             .map_err(|e| format!("Seek failed: {}", e))?;
 
-        // Read exactly sample_bytes, looping until we get all of it
+        // Time the read of exactly sample_bytes
+        let read_start = Instant::now();
         let mut total_read = 0;
         while total_read < sample_bytes {
-            let start = Instant::now();
             let bytes_read = file
                 .read(&mut buf.as_mut_slice()[total_read..])
                 .map_err(|e| format!("Read failed: {}", e))?;
@@ -233,10 +233,11 @@ pub fn bench_linear_read(
         }
 
         black_box(buf.as_mut_slice());
+        let elapsed = read_start.elapsed().as_secs_f64();
 
         // Only count samples that read the full size
-        if total_read == sample_bytes {
-            let speed_mbs = (sample_bytes as f64) / 0.001 / 1e6; // Approximate based on full read
+        if total_read == sample_bytes && elapsed > 0.0 {
+            let speed_mbs = (sample_bytes as f64) / elapsed / 1e6;
             total_speed += speed_mbs;
             min_speed = min_speed.min(speed_mbs);
             max_speed = max_speed.max(speed_mbs);
