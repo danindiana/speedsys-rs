@@ -6,7 +6,6 @@ use ratatui::prelude::*;
 use ratatui::widgets::Tabs;
 use crate::app::App;
 
-pub use common::*;
 
 pub fn render_screen(f: &mut Frame, app: &App) {
     match app.screen {
@@ -17,6 +16,7 @@ pub fn render_screen(f: &mut Frame, app: &App) {
     }
 }
 
+#[allow(dead_code)]
 pub fn render_tabs(app: &App) -> Tabs<'static> {
     let titles = vec!["Overview", "Disks", "Memory", "Report"];
     let selected = match app.screen {

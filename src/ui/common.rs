@@ -1,7 +1,7 @@
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders};
 
-pub fn cyan_block(title: &'static str) -> Block {
+pub fn cyan_block(title: &'static str) -> Block<'static> {
     Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
@@ -18,6 +18,7 @@ pub fn bar_line(name: &str, v: f64, max: f64, color: Color) -> Line<'static> {
     ])
 }
 
+#[allow(dead_code)]
 pub fn label_value(label: &str, value: &str) -> Line<'static> {
     Line::from(vec![
         Span::styled(format!("{label:<14}"), Style::default().fg(Color::White)),

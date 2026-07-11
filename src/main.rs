@@ -345,15 +345,15 @@ fn test_mode(sys: &sysinfo::SysInfo, samples: usize, sample_size_mb: usize, sele
         let rep = report::Report::new(sys.clone(), bench_results, disk_results);
         match format {
             "json" => {
-                rep.export_json(path).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+                rep.export_json(path).map_err(io::Error::other)?;
                 println!("✓ Results exported to {} (JSON)", path);
             }
             "csv" => {
-                rep.export_csv(path).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+                rep.export_csv(path).map_err(io::Error::other)?;
                 println!("✓ Results exported to {} (CSV)", path);
             }
             "html" => {
-                rep.export_html(path).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+                rep.export_html(path).map_err(io::Error::other)?;
                 println!("✓ Results exported to {} (HTML)", path);
             }
             _ => {}
@@ -469,6 +469,7 @@ fn start_disk_test(app: &mut App, samples: usize, sample_size_mb: usize) {
     app.disk_test_rx = Some(rx);
 }
 
+#[allow(dead_code)]
 fn export_report(sys: &sysinfo::SysInfo, path: &str, format: &str) -> io::Result<()> {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || run_benchmarks(tx));
@@ -493,15 +494,15 @@ fn export_report(sys: &sysinfo::SysInfo, path: &str, format: &str) -> io::Result
 
     match format {
         "json" => {
-            rep.export_json(path).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            rep.export_json(path).map_err(io::Error::other)?;
             println!("✓ Report exported to {}", path);
         }
         "html" => {
-            rep.export_html(path).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            rep.export_html(path).map_err(io::Error::other)?;
             println!("✓ Report exported to {}", path);
         }
         "csv" => {
-            rep.export_csv(path).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            rep.export_csv(path).map_err(io::Error::other)?;
             println!("✓ Report exported to {}", path);
         }
         _ => eprintln!("Unknown format: {}", format),

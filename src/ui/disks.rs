@@ -200,11 +200,9 @@ pub fn render_test(f: &mut Frame, app: &App) {
                 .data(&result.linear_speed_mbs);
 
             // Create y-axis labels with proper lifetime
-            let y_labels_str = vec![
-                format!("{:.0}", 0.0),
+            let y_labels_str = [format!("{:.0}", 0.0),
                 format!("{:.0}", max_speed * 0.5),
-                format!("{:.0}", max_speed),
-            ];
+                format!("{:.0}", max_speed)];
             let y_labels = y_labels_str.iter()
                 .map(|s| Span::raw(s.clone()))
                 .collect::<Vec<_>>();
@@ -270,11 +268,9 @@ pub fn render_test(f: &mut Frame, app: &App) {
                 .data(&seek_data);
 
             // Create y-axis labels
-            let y_labels_str = vec![
-                format!("{:.2}", 0.0),
+            let y_labels_str = [format!("{:.2}", 0.0),
                 format!("{:.2}", max_seek * 0.5),
-                format!("{:.2}", max_seek),
-            ];
+                format!("{:.2}", max_seek)];
             let y_labels = y_labels_str.iter()
                 .map(|s| Span::raw(s.clone()))
                 .collect::<Vec<_>>();

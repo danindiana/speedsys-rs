@@ -1,4 +1,3 @@
-use std::fs::File;
 use std::hint::black_box;
 use std::io::{Read, Seek, SeekFrom};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -14,7 +13,8 @@ pub struct DiskDevice {
     pub is_rotational: bool,
 }
 
-// Removed AlignedBuf - use simple Vec instead for device reads
+// Type alias for linear read benchmark results: (position_percent, speed_mbs_list, avg, min, max)
+type LinearReadResult = (Vec<(f64, f64)>, f64, f64, f64);
 
 /// List all block devices from /sys/block (skip loop, ram, zram; >= 1MB).
 pub fn scan_disks() -> Vec<DiskDevice> {
@@ -142,7 +142,7 @@ pub fn bench_linear_read(
     cancel: &AtomicBool,
     tx: Option<&mpsc::Sender<crate::bench::BenchMsg>>,
     start_time: std::time::Instant,
-) -> Result<(Vec<(f64, f64)>, f64, f64, f64), String> {
+) -> Result<LinearReadResult, String> {
     let sample_bytes = sample_size_mb * 1024 * 1024;
     let mut file = std::fs::File::open(device_path)
         .map_err(|e| format!("Failed to open {}: {}", device_path, e))?;
@@ -171,7 +171,7 @@ pub fn bench_linear_read(
     let mut total_speed: f64 = 0.0;
     let mut min_speed: f64 = f64::INFINITY;
     let mut max_speed: f64 = 0.0;
-    let progress_interval = (samples / 10).max(1).min(50); // Update every 50 samples or 10%, whichever is less frequent
+    let progress_interval = (samples / 10).clamp(1, 50); // Update every 50 samples or 10%, whichever is less frequent
 
     for i in 0..samples {
         // Check cancellation
@@ -187,10 +187,7 @@ pub fn bench_linear_read(
 
         // Time the read of exactly sample_bytes
         let read_start = Instant::now();
-        let bytes_read = match file.read(&mut buf) {
-            Ok(n) => n,
-            Err(_) => 0,
-        };
+        let bytes_read = file.read(&mut buf).unwrap_or_default();
 
         black_box(&buf);
         let elapsed = read_start.elapsed().as_secs_f64();
@@ -248,7 +245,7 @@ pub fn bench_random_seek(
     let mut latencies = Vec::new();
     let mut total: f64 = 0.0;
     let mut max_latency: f64 = 0.0;
-    let progress_interval = (num_seeks / 10).max(1).min(20); // Update every 20 seeks or 10%
+    let progress_interval = (num_seeks / 10).clamp(1, 20); // Update every 20 seeks or 10%
 
     use rand::Rng;
     let mut rng = rand::thread_rng();
@@ -290,14 +287,19 @@ pub fn bench_random_seek(
 }
 
 #[derive(Clone, Debug, Default)]
+#[allow(dead_code)]
 pub struct SmartInfo {
     pub temperature: Option<f64>,
+    #[allow(dead_code)]
     pub power_on_hours: Option<u64>,
+    #[allow(dead_code)]
     pub reallocated_sectors: Option<u64>,
+    #[allow(dead_code)]
     pub pending_sectors: Option<u64>,
 }
 
 /// Try to read SMART data via smartctl (requires: apt install smartmontools).
+#[allow(dead_code)]
 pub fn read_smart_info(_device_path: &str) -> Option<SmartInfo> {
     // Placeholder for Phase 4: smartctl -a -j integration
     None

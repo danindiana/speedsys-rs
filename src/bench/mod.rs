@@ -33,6 +33,8 @@ pub struct DiskBenchResult {
     pub avg_seek_ms: f64,
     pub max_seek_ms: f64,
     pub smart_temp: Option<f64>,
+    #[allow(dead_code)]
     pub smart_hours: Option<u64>,
+    #[allow(dead_code)]
     pub smart_sectors: Option<u64>,
 }

@@ -68,6 +68,7 @@ impl Args {
     }
 
     /// Get test mode (quick=true, full=false, none=None)
+    #[allow(dead_code)]
     pub fn test_mode(&self) -> Option<bool> {
         if self.quick_test {
             Some(true)
@@ -101,8 +102,8 @@ pub fn print_disks() {
         return;
     }
 
-    println!("\n{:<6} {:<20} {:<30} {:<10} {}",
-        "Index", "Device", "Model", "Size", "Type");
+    println!("\n{:<6} {:<20} {:<30} {:<10} Type",
+        "Index", "Device", "Model", "Size");
     println!("{}", "─".repeat(80));
 
     for (idx, disk) in disks.iter().enumerate() {
