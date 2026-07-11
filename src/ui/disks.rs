@@ -64,7 +64,7 @@ pub fn render_test(f: &mut Frame, app: &App) {
     lines.push(Line::from(""));
 
     // Show disk test results if available
-    if let Some(result) = app.bench_results.disk_results.iter().find(|r| r.device == device_name) {
+    if let Some(result) = app.disk_results.get(&device_name) {
         lines.push(Line::from(Span::styled(" ═══ Linear Read Performance ═══", g)));
         lines.push(Line::from(vec![
             Span::styled("Avg Speed     : ", w),

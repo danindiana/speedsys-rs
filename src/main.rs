@@ -4,7 +4,7 @@ mod app;
 mod ui;
 
 use app::{App, Screen};
-use bench::DiskBenchResult;
+use bench::{BenchMsg, DiskBenchResult};
 use crossterm::{
     event::{self, Event, KeyCode},
     execute,
@@ -31,21 +31,32 @@ fn main() -> io::Result<()> {
 
     let mut app = App::new(sys);
 
-    // Start background benchmarks
+    // Start background CPU/memory benchmarks
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || run_benchmarks(tx));
 
     let mut rx = rx;
     loop {
-        // Collect all pending results from CPU/memory benchmarks
-        while let Ok(r) = rx.try_recv() {
-            app.bench_results = r;
+        // Collect all pending messages
+        while let Ok(msg) = rx.try_recv() {
+            match msg {
+                BenchMsg::Status(s) => app.bench_results.status = s,
+                BenchMsg::CpuDone(mops) => app.bench_results.cpu_mops = Some(mops),
+                BenchMsg::SweepPoint(log2kb, mbs) => app.bench_results.sweep.push((log2kb, mbs)),
+                _ => {}
+            }
         }
 
-        // Collect all pending results from disk tests
+        // Collect disk test messages
         if let Some(ref disk_rx) = app.disk_test_rx {
-            while let Ok(r) = disk_rx.try_recv() {
-                app.bench_results = r;
+            while let Ok(msg) = disk_rx.try_recv() {
+                match msg {
+                    BenchMsg::Status(s) => app.bench_results.status = s,
+                    BenchMsg::DiskUpdate(result) => {
+                        app.disk_results.insert(result.device.clone(), result);
+                    }
+                    _ => {}
+                }
             }
         }
 
@@ -54,11 +65,42 @@ fn main() -> io::Result<()> {
             ui::render_screen(f, &app);
         })?;
 
-        // Handle input
+        // Handle input with screen-contextual semantics
         if event::poll(Duration::from_millis(100))? {
             if let Event::Key(k) = event::read()? {
                 match k.code {
-                    KeyCode::Char('q') | KeyCode::Esc => break,
+                    KeyCode::Char('q') => {
+                        app.request_cancel();
+                        app.join_worker();
+                        break;
+                    }
+                    KeyCode::Esc => {
+                        // Esc: cancel running test, else back, else quit
+                        if let Some(ref disk_rx) = app.disk_test_rx {
+                            if disk_rx.try_recv().is_err() {
+                                // No more messages, test is done
+                                app.disk_test_rx = None;
+                            }
+                        }
+                        if app.disk_test_rx.is_some() {
+                            // Test is running, cancel it
+                            app.request_cancel();
+                        } else {
+                            // Test not running, go back if not on Overview
+                            match app.screen {
+                                Screen::Overview => {
+                                    app.join_worker();
+                                    break;
+                                }
+                                Screen::DiskSelect | Screen::DiskTest => {
+                                    app.switch_screen(Screen::Overview);
+                                }
+                                _ => {
+                                    app.switch_screen(Screen::Overview);
+                                }
+                            }
+                        }
+                    }
                     KeyCode::Char('r') => {
                         let (tx2, rx2) = mpsc::channel();
                         rx = rx2;
@@ -81,18 +123,17 @@ fn main() -> io::Result<()> {
                         match app.screen {
                             Screen::Overview => app.switch_screen(Screen::DiskSelect),
                             Screen::DiskSelect => app.switch_screen(Screen::MemTest),
-                            Screen::DiskTest => app.switch_screen(Screen::Report),
                             Screen::MemTest => app.switch_screen(Screen::Report),
-                            Screen::Report => app.switch_screen(Screen::Overview),
+                            _ => app.switch_screen(Screen::Overview),
                         }
                     }
                     KeyCode::BackTab => {
                         match app.screen {
                             Screen::Overview => app.switch_screen(Screen::Report),
                             Screen::DiskSelect => app.switch_screen(Screen::Overview),
-                            Screen::DiskTest => app.switch_screen(Screen::DiskSelect),
                             Screen::MemTest => app.switch_screen(Screen::DiskSelect),
                             Screen::Report => app.switch_screen(Screen::MemTest),
+                            _ => {}
                         }
                     }
                     KeyCode::Up => {
@@ -112,12 +153,12 @@ fn main() -> io::Result<()> {
                     }
                     KeyCode::Char('t') => {
                         if app.screen == Screen::DiskSelect || app.screen == Screen::DiskTest {
-                            start_disk_test(&mut app, 64, 8, "quick");
+                            start_disk_test(&mut app, 64, 8);
                         }
                     }
                     KeyCode::Char('T') => {
                         if app.screen == Screen::DiskSelect || app.screen == Screen::DiskTest {
-                            start_disk_test(&mut app, 512, 16, "full");
+                            start_disk_test(&mut app, 512, 16);
                         }
                     }
                     _ => {}
@@ -136,8 +177,13 @@ fn dump_mode(sys: &sysinfo::SysInfo) -> io::Result<()> {
     thread::spawn(move || run_benchmarks(tx));
 
     let mut res = bench::BenchResults::default();
-    while let Ok(r) = rx.recv() {
-        res = r;
+    while let Ok(msg) = rx.recv() {
+        match msg {
+            BenchMsg::Status(s) => res.status = s,
+            BenchMsg::CpuDone(mops) => res.cpu_mops = Some(mops),
+            BenchMsg::SweepPoint(log2kb, mbs) => res.sweep.push((log2kb, mbs)),
+            _ => {}
+        }
         if res.status == "PASSED" {
             break;
         }
@@ -160,90 +206,54 @@ fn dump_mode(sys: &sysinfo::SysInfo) -> io::Result<()> {
     Ok(())
 }
 
-fn run_benchmarks(tx: mpsc::Sender<bench::BenchResults>) {
-    let mut r = bench::BenchResults {
-        status: "Testing processor...".into(),
-        ..Default::default()
-    };
-    let _ = tx.send(r.clone());
+fn run_benchmarks(tx: mpsc::Sender<BenchMsg>) {
+    let _ = tx.send(BenchMsg::Status("Testing processor...".into()));
 
-    r.cpu_mops = Some(bench::cpu_bench());
-    r.status = "Testing memory throughput...".into();
-    let _ = tx.send(r.clone());
+    let mops = bench::cpu_bench();
+    let _ = tx.send(BenchMsg::CpuDone(mops));
+    let _ = tx.send(BenchMsg::Status("Testing memory throughput...".into()));
 
     for kb in [
         4usize, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536,
     ] {
         let mbs = bench::mem_read_speed(kb * 1024);
-        r.sweep.push(((kb as f64).log2(), mbs));
-        r.status = format!("Testing extended memory... {kb} KB");
-        let _ = tx.send(r.clone());
+        let _ = tx.send(BenchMsg::SweepPoint((kb as f64).log2(), mbs));
+        let _ = tx.send(BenchMsg::Status(format!("Testing memory... {kb} KB")));
     }
-    r.status = "PASSED".into();
-    let _ = tx.send(r);
+    let _ = tx.send(BenchMsg::Status("PASSED".into()));
 }
 
-fn start_disk_test(app: &mut App, samples: usize, sample_size_mb: usize, mode: &str) {
+fn start_disk_test(app: &mut App, samples: usize, sample_size_mb: usize) {
     let device_name = app.disks.get(app.selected_disk).cloned().unwrap_or_default();
-    eprintln!("[DEBUG] Starting disk test for: {}", device_name);
-
     let all_devices = bench::disk::scan_disks();
-    eprintln!("[DEBUG] Found {} devices", all_devices.len());
-
     let device = match all_devices.iter().find(|d| d.name == device_name) {
         Some(d) => d.clone(),
-        None => {
-            eprintln!("[DEBUG] Device {} not found in scan", device_name);
-            return;
-        }
+        None => return,
     };
-
-    eprintln!("[DEBUG] Device path: {} (size: {} bytes)", device.path, device.size_bytes);
 
     let (tx, rx) = mpsc::channel();
     let cancel = app.cancel.clone();
-    let mode = mode.to_string(); // Convert to owned String
+    app.reset_cancel();
 
     let handle = thread::spawn(move || {
-        eprintln!("[WORKER] Thread spawned for {}", device.name);
-
         let mut result = DiskBenchResult {
             device: device.name.clone(),
             ..Default::default()
         };
 
-        // Send initial status
-        let _ = tx.send(bench::BenchResults {
-            status: format!("Testing linear read on {}...", device.name),
-            ..Default::default()
-        });
+        let _ = tx.send(BenchMsg::Status(format!("Linear read on {}...", device.name)));
 
-        eprintln!("[WORKER] Starting linear read test on {}", device.path);
-        let _ = tx.send(bench::BenchResults {
-            status: format!("Linear read in progress... 0/{} samples", samples),
-            ..Default::default()
-        });
-
-        // Linear read benchmark
-        match bench::disk::bench_linear_read(&device.path, samples, sample_size_mb) {
+        // Linear read with cancellation
+        match bench::disk::bench_linear_read(&device.path, samples, sample_size_mb, &cancel) {
             Ok((data, avg, min, max)) => {
-                eprintln!("[WORKER] Linear read OK: {:.1} MB/s", avg);
                 result.linear_speed_mbs = data;
                 result.avg_linear_mbs = avg;
                 result.min_linear_mbs = min;
                 result.max_linear_mbs = max;
-                let _ = tx.send(bench::BenchResults {
-                    status: format!("Linear read complete: {:.1} MB/s avg", avg),
-                    disk_results: vec![result.clone()],
-                    ..Default::default()
-                });
+                let _ = tx.send(BenchMsg::DiskUpdate(result.clone()));
             }
             Err(e) => {
-                eprintln!("[WORKER] Linear read ERROR: {}", e);
-                let _ = tx.send(bench::BenchResults {
-                    status: format!("Linear read error: {}", e),
-                    ..Default::default()
-                });
+                let _ = tx.send(BenchMsg::Status(format!("Linear read error: {}", e)));
                 return;
             }
         }
@@ -252,38 +262,24 @@ fn start_disk_test(app: &mut App, samples: usize, sample_size_mb: usize, mode: &
             return;
         }
 
-        // Random seek benchmark
-        let seek_samples = if mode == "quick" { 200 } else { 1000 };
-        let _ = tx.send(bench::BenchResults {
-            status: format!("Testing random seek on {}...", device.name),
-            disk_results: vec![result.clone()],
-            ..Default::default()
-        });
+        let _ = tx.send(BenchMsg::Status(format!("Random seek on {}...", device.name)));
 
-        match bench::disk::bench_random_seek(&device.path, seek_samples) {
+        // Random seek with cancellation
+        let seek_samples = 200; // Quick test default
+        match bench::disk::bench_random_seek(&device.path, seek_samples, &cancel) {
             Ok((latencies, avg, max)) => {
                 result.seek_times_ms = latencies;
                 result.avg_seek_ms = avg;
                 result.max_seek_ms = max;
             }
             Err(e) => {
-                let _ = tx.send(bench::BenchResults {
-                    status: format!("Seek test error: {}", e),
-                    ..Default::default()
-                });
+                let _ = tx.send(BenchMsg::Status(format!("Seek test error: {}", e)));
                 return;
             }
         }
 
-        // Smart info (optional)
-        result.smart_temp = bench::disk::read_smart_info(&device.path).and_then(|s| s.temperature);
-
-        // Send final result
-        let _ = tx.send(bench::BenchResults {
-            disk_results: vec![result],
-            status: "✓ Disk test completed".into(),
-            ..Default::default()
-        });
+        let _ = tx.send(BenchMsg::DiskUpdate(result));
+        let _ = tx.send(BenchMsg::Status("✓ Test complete".into()));
     });
 
     app.worker = Some(handle);

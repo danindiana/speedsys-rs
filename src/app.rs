@@ -1,5 +1,6 @@
-use crate::bench::BenchResults;
+use crate::bench::{BenchResults, DiskBenchResult};
 use crate::sysinfo::SysInfo;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -18,11 +19,12 @@ pub struct App {
     pub screen: Screen,
     pub sys_info: SysInfo,
     pub bench_results: BenchResults,
+    pub disk_results: HashMap<String, DiskBenchResult>,
     pub selected_disk: usize,
     pub disks: Vec<String>,
     pub worker: Option<JoinHandle<()>>,
     pub cancel: Arc<AtomicBool>,
-    pub disk_test_rx: Option<mpsc::Receiver<BenchResults>>,
+    pub disk_test_rx: Option<mpsc::Receiver<crate::bench::BenchMsg>>,
 }
 
 impl App {
@@ -36,6 +38,7 @@ impl App {
             screen: Screen::Overview,
             sys_info,
             bench_results: BenchResults::default(),
+            disk_results: HashMap::new(),
             selected_disk: 0,
             disks,
             worker: None,
@@ -69,6 +72,12 @@ impl App {
             } else {
                 self.selected_disk -= 1;
             }
+        }
+    }
+
+    pub fn join_worker(&mut self) {
+        if let Some(w) = self.worker.take() {
+            let _ = w.join();
         }
     }
 }
