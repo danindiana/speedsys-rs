@@ -160,8 +160,8 @@ pub fn render_test(f: &mut Frame, app: &App) {
         Style::default().fg(status_color),
     )));
 
-    // Split layout
-    let chunks = ratatui::layout::Layout::default()
+    // Split layout: left (info), right (charts)
+    let h_chunks = ratatui::layout::Layout::default()
         .direction(ratatui::layout::Direction::Horizontal)
         .constraints([
             ratatui::layout::Constraint::Percentage(35),
@@ -173,9 +173,18 @@ pub fn render_test(f: &mut Frame, app: &App) {
     let left_para = Paragraph::new(left_lines)
         .block(cyan_block(" Device Info "))
         .scroll((0, 0));
-    f.render_widget(left_para, chunks[0]);
+    f.render_widget(left_para, h_chunks[0]);
 
-    // Render right panel: linear read chart
+    // Split right panel into two charts vertically
+    let v_chunks = ratatui::layout::Layout::default()
+        .direction(ratatui::layout::Direction::Vertical)
+        .constraints([
+            ratatui::layout::Constraint::Percentage(50),
+            ratatui::layout::Constraint::Percentage(50),
+        ])
+        .split(h_chunks[1]);
+
+    // Render right-top panel: linear read chart
     if let Some(result) = app.disk_results.get(&device_name) {
         if !result.linear_speed_mbs.is_empty() {
             let max_speed = result.linear_speed_mbs.iter()
@@ -218,7 +227,7 @@ pub fn render_test(f: &mut Frame, app: &App) {
                     .bounds([0.0, max_speed * 1.1])
                     .labels(y_labels));
 
-            f.render_widget(chart, chunks[1]);
+            f.render_widget(chart, v_chunks[0]);
         } else {
             // Show placeholder if no data yet
             let placeholder = Paragraph::new("Waiting for data...")
@@ -227,16 +236,81 @@ pub fn render_test(f: &mut Frame, app: &App) {
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(Color::DarkGray)))
                 .alignment(Alignment::Center);
-            f.render_widget(placeholder, chunks[1]);
+            f.render_widget(placeholder, v_chunks[0]);
         }
     } else {
         // Show hint if no test started
-        let hint = Paragraph::new("Select test (t/T) to see chart")
+        let hint = Paragraph::new("Select test (t/T)")
             .block(Block::default()
                 .title("Linear Read Speed")
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::DarkGray)))
             .alignment(Alignment::Center);
-        f.render_widget(hint, chunks[1]);
+        f.render_widget(hint, v_chunks[0]);
+    }
+
+    // Render right-bottom panel: seek latency chart
+    if let Some(result) = app.disk_results.get(&device_name) {
+        if !result.seek_times_ms.is_empty() {
+            let max_seek = result.seek_times_ms.iter()
+                .cloned()
+                .fold(0.0, f64::max)
+                .max(0.1);
+
+            // Convert seek times to (index, latency) tuples for scatter plot
+            let seek_data: Vec<(f64, f64)> = result.seek_times_ms.iter()
+                .enumerate()
+                .map(|(i, &lat)| (i as f64, lat))
+                .collect();
+
+            let dataset = Dataset::default()
+                .name("Seek Latency (ms)")
+                .marker(Marker::Dot)
+                .style(Style::default().fg(Color::Yellow))
+                .data(&seek_data);
+
+            // Create y-axis labels
+            let y_labels_str = vec![
+                format!("{:.2}", 0.0),
+                format!("{:.2}", max_seek * 0.5),
+                format!("{:.2}", max_seek),
+            ];
+            let y_labels = y_labels_str.iter()
+                .map(|s| Span::raw(s.clone()))
+                .collect::<Vec<_>>();
+
+            let chart = Chart::new(vec![dataset])
+                .block(Block::default()
+                    .title("Random Seek Latency")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Yellow)))
+                .x_axis(Axis::default()
+                    .title("Seek #")
+                    .bounds([0.0, result.seek_times_ms.len() as f64]))
+                .y_axis(Axis::default()
+                    .title("Latency (ms)")
+                    .bounds([0.0, max_seek * 1.1])
+                    .labels(y_labels));
+
+            f.render_widget(chart, v_chunks[1]);
+        } else {
+            // Show placeholder if no seek data yet
+            let placeholder = Paragraph::new("Waiting for seeks...")
+                .block(Block::default()
+                    .title("Random Seek Latency")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::DarkGray)))
+                .alignment(Alignment::Center);
+            f.render_widget(placeholder, v_chunks[1]);
+        }
+    } else {
+        // Show hint
+        let hint = Paragraph::new("Run test for results")
+            .block(Block::default()
+                .title("Random Seek Latency")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::DarkGray)))
+            .alignment(Alignment::Center);
+        f.render_widget(hint, v_chunks[1]);
     }
 }
