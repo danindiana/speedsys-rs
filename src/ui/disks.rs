@@ -35,11 +35,22 @@ pub fn render_test(f: &mut Frame, app: &App) {
     let y = Style::default().fg(Color::Yellow);
     let w = Style::default().fg(Color::White);
     let g = Style::default().fg(Color::Green);
+    let cyan = Style::default().fg(Color::Cyan);
 
     let device_name = app.disks.get(app.selected_disk).cloned().unwrap_or_default();
     let all_devices = crate::bench::disk::scan_disks();
     let device = all_devices.iter().find(|d| d.name == device_name);
 
+    // Split layout: info on left, charts on right
+    let chunks = ratatui::layout::Layout::default()
+        .direction(ratatui::layout::Direction::Horizontal)
+        .constraints([
+            ratatui::layout::Constraint::Percentage(30),
+            ratatui::layout::Constraint::Percentage(70),
+        ])
+        .split(f.size());
+
+    // Left panel: device info
     let mut lines = vec![];
     if let Some(dev) = device {
         let size_gb = dev.size_bytes as f64 / 1e9;

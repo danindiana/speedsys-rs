@@ -1,10 +1,7 @@
-use std::alloc::{alloc, dealloc, Layout};
 use std::fs::File;
 use std::hint::black_box;
 use std::io::{Read, Seek, SeekFrom};
-use std::os::unix::fs::OpenOptionsExt;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use std::time::Instant;
 
 #[derive(Clone, Debug)]
@@ -16,34 +13,7 @@ pub struct DiskDevice {
     pub is_rotational: bool,
 }
 
-/// Aligned buffer for O_DIRECT reads.
-struct AlignedBuf {
-    ptr: *mut u8,
-    len: usize,
-    layout: Layout,
-}
-
-impl AlignedBuf {
-    fn new(size: usize) -> Result<Self, String> {
-        let layout = Layout::from_size_align(size, 4096)
-            .map_err(|_| "Invalid buffer layout".to_string())?;
-        let ptr = unsafe { alloc(layout) };
-        if ptr.is_null() {
-            return Err("Buffer allocation failed".to_string());
-        }
-        Ok(AlignedBuf { ptr, len: size, layout })
-    }
-
-    fn as_mut_slice(&mut self) -> &mut [u8] {
-        unsafe { std::slice::from_raw_parts_mut(self.ptr, self.len) }
-    }
-}
-
-impl Drop for AlignedBuf {
-    fn drop(&mut self) {
-        unsafe { dealloc(self.ptr, self.layout) };
-    }
-}
+// Removed AlignedBuf - use simple Vec instead for device reads
 
 /// List all block devices from /sys/block (skip loop, ram, zram; >= 1MB).
 pub fn scan_disks() -> Vec<DiskDevice> {
@@ -171,14 +141,7 @@ pub fn bench_linear_read(
     cancel: &AtomicBool,
 ) -> Result<(Vec<(f64, f64)>, f64, f64, f64), String> {
     let sample_bytes = sample_size_mb * 1024 * 1024;
-    let mut file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_DIRECT)
-        .open(device_path)
-        .or_else(|_| {
-            // O_DIRECT failed; fall back to buffered with fadvise
-            std::fs::File::open(device_path)
-        })
+    let mut file = std::fs::File::open(device_path)
         .map_err(|e| format!("Failed to open {}: {}", device_path, e))?;
 
     // Read device size from /sys/block
@@ -200,7 +163,7 @@ pub fn bench_linear_read(
         ));
     }
 
-    let mut buf = AlignedBuf::new(sample_bytes)?;
+    let mut buf = vec![0u8; sample_bytes];
     let mut results = Vec::new();
     let mut total_speed: f64 = 0.0;
     let mut min_speed: f64 = f64::INFINITY;
@@ -220,13 +183,12 @@ pub fn bench_linear_read(
 
         // Time the read of exactly sample_bytes
         let read_start = Instant::now();
-        let bytes_read = file
-            .read_exact(buf.as_mut_slice())
-            .map_err(|e| format!("Read failed: {}", e))
-            .ok()
-            .unwrap_or(0);
+        let bytes_read = match file.read(&mut buf) {
+            Ok(n) => n,
+            Err(_) => 0,
+        };
 
-        black_box(buf.as_mut_slice());
+        black_box(&buf);
         let elapsed = read_start.elapsed().as_secs_f64();
 
         // Only count samples that read the full size
@@ -249,11 +211,7 @@ pub fn bench_random_seek(
     num_seeks: usize,
     cancel: &AtomicBool,
 ) -> Result<(Vec<f64>, f64, f64), String> {
-    let mut file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_DIRECT)
-        .open(device_path)
-        .or_else(|_| std::fs::File::open(device_path))
+    let mut file = std::fs::File::open(device_path)
         .map_err(|e| format!("Failed to open {}: {}", device_path, e))?;
 
     // Read device size from /sys/block
@@ -272,7 +230,7 @@ pub fn bench_random_seek(
         return Err("Device too small for seek test".to_string());
     }
 
-    let mut buf = AlignedBuf::new(4096)?;
+    let mut buf = [0u8; 4096];
     let mut latencies = Vec::new();
     let mut total: f64 = 0.0;
     let mut max_latency: f64 = 0.0;
@@ -294,12 +252,10 @@ pub fn bench_random_seek(
             .map_err(|e| format!("Seek failed: {}", e))?;
 
         let _start = Instant::now();
-        let _ = file
-            .read_exact(buf.as_mut_slice())
-            .map_err(|e| format!("Read failed: {}", e))?;
+        let _ = file.read(&mut buf);
         let latency_ms = _start.elapsed().as_secs_f64() * 1000.0;
 
-        black_box(buf.as_mut_slice());
+        black_box(&buf);
 
         total += latency_ms;
         max_latency = max_latency.max(latency_ms);
