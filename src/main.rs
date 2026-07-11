@@ -37,9 +37,16 @@ fn main() -> io::Result<()> {
 
     let mut rx = rx;
     loop {
-        // Collect all pending results
+        // Collect all pending results from CPU/memory benchmarks
         while let Ok(r) = rx.try_recv() {
             app.bench_results = r;
+        }
+
+        // Collect all pending results from disk tests
+        if let Some(ref disk_rx) = app.disk_test_rx {
+            while let Ok(r) = disk_rx.try_recv() {
+                app.bench_results = r;
+            }
         }
 
         // Draw current screen
@@ -184,7 +191,7 @@ fn start_disk_test(app: &mut App, samples: usize, sample_size_mb: usize, mode: &
         None => return,
     };
 
-    let (tx, _rx) = mpsc::channel();
+    let (tx, rx) = mpsc::channel();
     let cancel = app.cancel.clone();
     let mode = mode.to_string(); // Convert to owned String
 
@@ -194,6 +201,12 @@ fn start_disk_test(app: &mut App, samples: usize, sample_size_mb: usize, mode: &
             ..Default::default()
         };
 
+        // Send initial status
+        let _ = tx.send(bench::BenchResults {
+            status: format!("Testing linear read on {}...", device.name),
+            ..Default::default()
+        });
+
         // Linear read benchmark
         match bench::disk::bench_linear_read(&device.path, samples, sample_size_mb) {
             Ok((data, avg, min, max)) => {
@@ -201,6 +214,11 @@ fn start_disk_test(app: &mut App, samples: usize, sample_size_mb: usize, mode: &
                 result.avg_linear_mbs = avg;
                 result.min_linear_mbs = min;
                 result.max_linear_mbs = max;
+                let _ = tx.send(bench::BenchResults {
+                    status: format!("Linear read: {:.1} MB/s avg", avg),
+                    disk_results: vec![result.clone()],
+                    ..Default::default()
+                });
             }
             Err(e) => {
                 let _ = tx.send(bench::BenchResults {
@@ -217,6 +235,12 @@ fn start_disk_test(app: &mut App, samples: usize, sample_size_mb: usize, mode: &
 
         // Random seek benchmark
         let seek_samples = if mode == "quick" { 200 } else { 1000 };
+        let _ = tx.send(bench::BenchResults {
+            status: format!("Testing random seek on {}...", device.name),
+            disk_results: vec![result.clone()],
+            ..Default::default()
+        });
+
         match bench::disk::bench_random_seek(&device.path, seek_samples) {
             Ok((latencies, avg, max)) => {
                 result.seek_times_ms = latencies;
@@ -238,10 +262,11 @@ fn start_disk_test(app: &mut App, samples: usize, sample_size_mb: usize, mode: &
         // Send final result
         let _ = tx.send(bench::BenchResults {
             disk_results: vec![result],
-            status: "Disk test completed".into(),
+            status: "✓ Disk test completed".into(),
             ..Default::default()
         });
     });
 
     app.worker = Some(handle);
+    app.disk_test_rx = Some(rx);
 }

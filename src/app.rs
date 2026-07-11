@@ -1,6 +1,7 @@
 use crate::bench::BenchResults;
 use crate::sysinfo::SysInfo;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
@@ -21,6 +22,7 @@ pub struct App {
     pub disks: Vec<String>,
     pub worker: Option<JoinHandle<()>>,
     pub cancel: Arc<AtomicBool>,
+    pub disk_test_rx: Option<mpsc::Receiver<BenchResults>>,
 }
 
 impl App {
@@ -38,6 +40,7 @@ impl App {
             disks,
             worker: None,
             cancel: Arc::new(AtomicBool::new(false)),
+            disk_test_rx: None,
         }
     }
 

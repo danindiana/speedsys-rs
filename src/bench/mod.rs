@@ -13,7 +13,7 @@ pub struct BenchResults {
     pub status: String,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct DiskBenchResult {
     pub device: String,
     pub linear_speed_mbs: Vec<(f64, f64)>, // (position %, MB/s)
