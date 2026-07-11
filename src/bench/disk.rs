@@ -108,6 +108,12 @@ pub fn bench_linear_read(
         min_speed = min_speed.min(speed_mbs);
         max_speed = max_speed.max(speed_mbs);
         results.push((position_pct, speed_mbs));
+
+        // Log progress every 50 samples
+        if (i + 1) % 50 == 0 {
+            eprintln!("[WORKER] Linear read progress: {}/{} samples ({:.1}% done)",
+                     i + 1, samples, ((i + 1) as f64 / samples as f64) * 100.0);
+        }
     }
 
     let avg_speed = total_speed / samples as f64;

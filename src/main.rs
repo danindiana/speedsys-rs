@@ -219,6 +219,11 @@ fn start_disk_test(app: &mut App, samples: usize, sample_size_mb: usize, mode: &
         });
 
         eprintln!("[WORKER] Starting linear read test on {}", device.path);
+        let _ = tx.send(bench::BenchResults {
+            status: format!("Linear read in progress... 0/{} samples", samples),
+            ..Default::default()
+        });
+
         // Linear read benchmark
         match bench::disk::bench_linear_read(&device.path, samples, sample_size_mb) {
             Ok((data, avg, min, max)) => {
@@ -228,7 +233,7 @@ fn start_disk_test(app: &mut App, samples: usize, sample_size_mb: usize, mode: &
                 result.min_linear_mbs = min;
                 result.max_linear_mbs = max;
                 let _ = tx.send(bench::BenchResults {
-                    status: format!("Linear read: {:.1} MB/s avg", avg),
+                    status: format!("Linear read complete: {:.1} MB/s avg", avg),
                     disk_results: vec![result.clone()],
                     ..Default::default()
                 });
