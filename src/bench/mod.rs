@@ -1,6 +1,7 @@
 pub mod cpu;
 pub mod mem;
 pub mod disk;
+pub mod thermal;
 
 pub use cpu::cpu_bench;
 pub use mem::mem_read_speed;
@@ -13,6 +14,7 @@ pub enum BenchMsg {
     SweepPoint(f64, f64),                 // (log2 KB, MB/s)
     DiskUpdate(DiskBenchResult),          // Partial or complete disk result
     Progress(usize, usize, f64),          // (current_sample, total_samples, elapsed_secs)
+    ThermalUpdate(thermal::ThermalSample, thermal::ThermalSample),  // (before, after)
 }
 
 #[derive(Clone, Debug, Default)]
@@ -20,6 +22,12 @@ pub struct BenchResults {
     pub cpu_mops: Option<f64>,
     pub sweep: Vec<(f64, f64)>, // (log2 KB, MB/s)
     pub status: String,
+    pub cpu_temp_before_c: Option<f64>,
+    pub cpu_temp_after_c: Option<f64>,
+    pub cpu_freq_before_mhz: Option<u64>,
+    pub cpu_freq_after_mhz: Option<u64>,
+    pub cpu_max_freq_mhz: Option<u64>,
+    pub throttle_detected: bool,
 }
 
 #[derive(Clone, Debug, Default)]

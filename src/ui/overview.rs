@@ -67,6 +67,30 @@ pub fn render(f: &mut Frame, sys: &SysInfo, res: &BenchResults) {
         format!("  {score:.0} Mops/s   Processor benchmark"),
         Style::default().fg(Color::LightCyan).bold(),
     )));
+
+    // Add thermal info if available
+    if let (Some(temp_before), Some(temp_after)) = (res.cpu_temp_before_c, res.cpu_temp_after_c) {
+        let (freq_before, freq_after, max_freq) = (
+            res.cpu_freq_before_mhz.unwrap_or(0),
+            res.cpu_freq_after_mhz.unwrap_or(0),
+            res.cpu_max_freq_mhz.unwrap_or(0),
+        );
+        let thermal_line = if res.throttle_detected {
+            Span::styled(
+                format!("  Temp: {:.0}°C → {:.0}°C   Freq: {} → {}MHz / {}MHz   [THROTTLED]",
+                    temp_before, temp_after, freq_before, freq_after, max_freq),
+                Style::default().fg(Color::Red).bold(),
+            )
+        } else {
+            Span::styled(
+                format!("  Temp: {:.0}°C → {:.0}°C   Freq: {} → {}MHz / {}MHz",
+                    temp_before, temp_after, freq_before, freq_after, max_freq),
+                Style::default().fg(Color::Green),
+            )
+        };
+        rows.push(Line::from(thermal_line));
+    }
+
     f.render_widget(Paragraph::new(rows).block(cyan_block(" Processor benchmark ")), left[1]);
 
     // — right/top: the staircase —

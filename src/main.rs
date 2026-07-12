@@ -90,6 +90,17 @@ fn tui_mode(sys: &sysinfo::SysInfo) -> io::Result<()> {
                 BenchMsg::Status(s) => app.bench_results.status = s,
                 BenchMsg::CpuDone(mops) => app.bench_results.cpu_mops = Some(mops),
                 BenchMsg::SweepPoint(log2kb, mbs) => app.bench_results.sweep.push((log2kb, mbs)),
+                BenchMsg::ThermalUpdate(before, after) => {
+                    app.bench_results.cpu_temp_before_c = before.temp_c;
+                    app.bench_results.cpu_temp_after_c = after.temp_c;
+                    app.bench_results.cpu_freq_before_mhz = before.freq_mhz;
+                    app.bench_results.cpu_freq_after_mhz = after.freq_mhz;
+                    app.bench_results.cpu_max_freq_mhz = after.max_freq_mhz;
+                    if let (Some(after_freq), Some(max_freq)) = (after.freq_mhz, after.max_freq_mhz) {
+                        let freq_percent = (after_freq as f64 / max_freq as f64) * 100.0;
+                        app.bench_results.throttle_detected = freq_percent < 90.0;
+                    }
+                }
                 _ => {}
             }
         }
@@ -235,6 +246,17 @@ fn dump_mode(sys: &sysinfo::SysInfo) -> io::Result<()> {
             BenchMsg::Status(s) => res.status = s,
             BenchMsg::CpuDone(mops) => res.cpu_mops = Some(mops),
             BenchMsg::SweepPoint(log2kb, mbs) => res.sweep.push((log2kb, mbs)),
+            BenchMsg::ThermalUpdate(before, after) => {
+                res.cpu_temp_before_c = before.temp_c;
+                res.cpu_temp_after_c = after.temp_c;
+                res.cpu_freq_before_mhz = before.freq_mhz;
+                res.cpu_freq_after_mhz = after.freq_mhz;
+                res.cpu_max_freq_mhz = after.max_freq_mhz;
+                if let (Some(after_freq), Some(max_freq)) = (after.freq_mhz, after.max_freq_mhz) {
+                    let freq_percent = (after_freq as f64 / max_freq as f64) * 100.0;
+                    res.throttle_detected = freq_percent < 90.0;
+                }
+            }
             _ => {}
         }
         if res.status == "PASSED" {
@@ -279,6 +301,17 @@ fn test_mode(sys: &sysinfo::SysInfo, samples: usize, sample_size_mb: usize, sele
             }
             BenchMsg::CpuDone(mops) => bench_results.cpu_mops = Some(mops),
             BenchMsg::SweepPoint(log2kb, mbs) => bench_results.sweep.push((log2kb, mbs)),
+            BenchMsg::ThermalUpdate(before, after) => {
+                bench_results.cpu_temp_before_c = before.temp_c;
+                bench_results.cpu_temp_after_c = after.temp_c;
+                bench_results.cpu_freq_before_mhz = before.freq_mhz;
+                bench_results.cpu_freq_after_mhz = after.freq_mhz;
+                bench_results.cpu_max_freq_mhz = after.max_freq_mhz;
+                if let (Some(after_freq), Some(max_freq)) = (after.freq_mhz, after.max_freq_mhz) {
+                    let freq_percent = (after_freq as f64 / max_freq as f64) * 100.0;
+                    bench_results.throttle_detected = freq_percent < 90.0;
+                }
+            }
             _ => {}
         }
         if bench_results.status == "PASSED" {
@@ -367,8 +400,13 @@ fn test_mode(sys: &sysinfo::SysInfo, samples: usize, sample_size_mb: usize, sele
 fn run_benchmarks(tx: mpsc::Sender<BenchMsg>) {
     let _ = tx.send(BenchMsg::Status("Testing processor...".into()));
 
+    // Sample CPU thermal state before and after benchmark
+    let thermal_before = bench::thermal::sample();
     let mops = bench::cpu_bench();
+    let thermal_after = bench::thermal::sample();
+
     let _ = tx.send(BenchMsg::CpuDone(mops));
+    let _ = tx.send(BenchMsg::ThermalUpdate(thermal_before, thermal_after));
     let _ = tx.send(BenchMsg::Status("Testing memory throughput...".into()));
 
     for kb in [
@@ -472,6 +510,17 @@ fn screenshot_mode(sys: &sysinfo::SysInfo, screen_name: &str, out_path: &str) ->
                     BenchMsg::Status(s) => app.bench_results.status = s.clone(),
                     BenchMsg::CpuDone(mops) => app.bench_results.cpu_mops = Some(mops),
                     BenchMsg::SweepPoint(log2kb, mbs) => app.bench_results.sweep.push((log2kb, mbs)),
+                    BenchMsg::ThermalUpdate(before, after) => {
+                        app.bench_results.cpu_temp_before_c = before.temp_c;
+                        app.bench_results.cpu_temp_after_c = after.temp_c;
+                        app.bench_results.cpu_freq_before_mhz = before.freq_mhz;
+                        app.bench_results.cpu_freq_after_mhz = after.freq_mhz;
+                        app.bench_results.cpu_max_freq_mhz = after.max_freq_mhz;
+                        if let (Some(after_freq), Some(max_freq)) = (after.freq_mhz, after.max_freq_mhz) {
+                            let freq_percent = (after_freq as f64 / max_freq as f64) * 100.0;
+                            app.bench_results.throttle_detected = freq_percent < 90.0;
+                        }
+                    }
                     _ => {}
                 }
                 if app.bench_results.status == "PASSED" {

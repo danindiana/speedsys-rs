@@ -32,6 +32,14 @@ impl Report {
             },
             "benchmarks": {
                 "cpu_mops": self.bench_results.cpu_mops,
+                "thermal": {
+                    "cpu_temp_before_c": self.bench_results.cpu_temp_before_c,
+                    "cpu_temp_after_c": self.bench_results.cpu_temp_after_c,
+                    "cpu_freq_before_mhz": self.bench_results.cpu_freq_before_mhz,
+                    "cpu_freq_after_mhz": self.bench_results.cpu_freq_after_mhz,
+                    "cpu_max_freq_mhz": self.bench_results.cpu_max_freq_mhz,
+                    "throttle_detected": self.bench_results.throttle_detected,
+                },
                 "memory_sweep": self.bench_results.sweep.iter()
                     .map(|(log2kb, mbs)| {
                         serde_json::json!({
@@ -91,6 +99,25 @@ impl Report {
         if let Some(mops) = self.bench_results.cpu_mops {
             writeln!(file, "CPU,Benchmark,Performance,{:.1},MOPS", mops).map_err(|e| e.to_string())?;
         }
+
+        // CPU Thermal
+        if let Some(temp) = self.bench_results.cpu_temp_before_c {
+            writeln!(file, "CPU,Thermal,Temperature Before,{:.0},°C", temp).map_err(|e| e.to_string())?;
+        }
+        if let Some(temp) = self.bench_results.cpu_temp_after_c {
+            writeln!(file, "CPU,Thermal,Temperature After,{:.0},°C", temp).map_err(|e| e.to_string())?;
+        }
+        if let Some(freq) = self.bench_results.cpu_freq_before_mhz {
+            writeln!(file, "CPU,Thermal,Frequency Before,{},MHz", freq).map_err(|e| e.to_string())?;
+        }
+        if let Some(freq) = self.bench_results.cpu_freq_after_mhz {
+            writeln!(file, "CPU,Thermal,Frequency After,{},MHz", freq).map_err(|e| e.to_string())?;
+        }
+        if let Some(freq) = self.bench_results.cpu_max_freq_mhz {
+            writeln!(file, "CPU,Thermal,Frequency Max,{},MHz", freq).map_err(|e| e.to_string())?;
+        }
+        let throttle_str = if self.bench_results.throttle_detected { "yes" } else { "no" };
+        writeln!(file, "CPU,Thermal,Throttled,{},—", throttle_str).map_err(|e| e.to_string())?;
 
         // Memory sweep
         for (log2kb, mbs) in &self.bench_results.sweep {
@@ -279,6 +306,14 @@ impl Report {
             color: #ff4444;
             font-weight: bold;
         }}
+        .thermal-ok {{
+            color: #22c55e;
+            font-weight: bold;
+        }}
+        .thermal-throttled {{
+            color: #ff4444;
+            font-weight: bold;
+        }}
     </style>
 </head>
 <body>
@@ -318,6 +353,24 @@ impl Report {
             </tbody>
         </table>
 
+        <h2>CPU / Thermal</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Metric</th>
+                    <th>Value</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr><td>Temperature Before</td><td>{}</td></tr>
+                <tr><td>Temperature After</td><td>{}</td></tr>
+                <tr><td>Frequency Before</td><td>{}</td></tr>
+                <tr><td>Frequency After</td><td>{}</td></tr>
+                <tr><td>Max Frequency</td><td>{}</td></tr>
+                <tr><td>Throttle Detected</td><td>{}</td></tr>
+            </tbody>
+        </table>
+
         <div class="timestamp">Report generated: {}</div>
     </div>
 </body>
@@ -329,6 +382,16 @@ impl Report {
             self.sys_info.mem_total_mb as f64 / 1024.0,
             device_rows,
             cpu_row,
+            self.bench_results.cpu_temp_before_c.map(|t| format!("{:.0}°C", t)).unwrap_or_else(|| "—".to_string()),
+            self.bench_results.cpu_temp_after_c.map(|t| format!("{:.0}°C", t)).unwrap_or_else(|| "—".to_string()),
+            self.bench_results.cpu_freq_before_mhz.map(|f| format!("{}MHz", f)).unwrap_or_else(|| "—".to_string()),
+            self.bench_results.cpu_freq_after_mhz.map(|f| format!("{}MHz", f)).unwrap_or_else(|| "—".to_string()),
+            self.bench_results.cpu_max_freq_mhz.map(|f| format!("{}MHz", f)).unwrap_or_else(|| "—".to_string()),
+            {
+                let class = if self.bench_results.throttle_detected { "thermal-throttled" } else { "thermal-ok" };
+                let status = if self.bench_results.throttle_detected { "YES" } else { "NO" };
+                format!("<span class=\"{}\">{}</span>", class, status)
+            },
             timestamp
         );
 
