@@ -96,12 +96,45 @@ pub fn render_test(f: &mut Frame, app: &App) {
             Span::styled(format!("{:.2} ms", result.max_seek_ms), y),
         ]));
 
-        if let Some(temp) = result.smart_temp {
+        if result.smart_temp.is_some()
+            || result.smart_hours.is_some()
+            || result.smart_sectors.is_some()
+        {
             left_lines.push(Line::from(""));
-            left_lines.push(Line::from(vec![
-                Span::styled("Temperature : ", w),
-                Span::styled(format!("{:.0}°C", temp), y),
-            ]));
+
+            // Temperature with warning highlight if >55°C
+            if let Some(temp) = result.smart_temp {
+                let temp_style = if temp > 55.0 {
+                    Style::default().fg(Color::Red)
+                } else {
+                    y
+                };
+                left_lines.push(Line::from(vec![
+                    Span::styled("Temperature : ", w),
+                    Span::styled(format!("{:.0}°C", temp), temp_style),
+                ]));
+            }
+
+            // Power-on hours (informational)
+            if let Some(hours) = result.smart_hours {
+                left_lines.push(Line::from(vec![
+                    Span::styled("Power-On Hrs : ", w),
+                    Span::styled(format!("{}", hours), y),
+                ]));
+            }
+
+            // Defect sectors with warning highlight if >0
+            if let Some(sectors) = result.smart_sectors {
+                let sector_style = if sectors > 0 {
+                    Style::default().fg(Color::Red).bold()
+                } else {
+                    y
+                };
+                left_lines.push(Line::from(vec![
+                    Span::styled("Defect Sect : ", w),
+                    Span::styled(format!("{}", sectors), sector_style),
+                ]));
+            }
         }
     } else {
         left_lines.push(Line::from(Span::styled(

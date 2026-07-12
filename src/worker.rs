@@ -60,6 +60,13 @@ pub fn run_disk_test(
         }
     }
 
+    // Read SMART data (independent of benchmarks, added after seek completes)
+    if let Some(smart) = disk::read_smart_info(device_path) {
+        result.smart_temp = smart.temperature;
+        result.smart_hours = smart.power_on_hours;
+        result.smart_sectors = smart.reallocated_sectors.map(|r| r + smart.pending_sectors.unwrap_or(0));
+    }
+
     let _ = tx.send(BenchMsg::DiskUpdate(result));
     let _ = tx.send(BenchMsg::Status("✓ Test complete".into()));
 }

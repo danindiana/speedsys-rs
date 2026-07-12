@@ -54,7 +54,11 @@ impl Report {
                                 "max": result.max_seek_ms,
                                 "samples": result.seek_times_ms.len(),
                             },
-                            "temperature_c": result.smart_temp,
+                            "smart": {
+                                "temperature_c": result.smart_temp,
+                                "power_on_hours": result.smart_hours,
+                                "defect_sectors": result.smart_sectors,
+                            }
                         }))
                     })
                     .collect::<HashMap<_, _>>(),
@@ -95,6 +99,12 @@ impl Report {
             if let Some(temp) = result.smart_temp {
                 writeln!(file, "{},SMART,Temperature,{:.0},°C", device, temp).map_err(|e| e.to_string())?;
             }
+            if let Some(hours) = result.smart_hours {
+                writeln!(file, "{},SMART,Power-On Hours,{},hrs", device, hours).map_err(|e| e.to_string())?;
+            }
+            if let Some(sectors) = result.smart_sectors {
+                writeln!(file, "{},SMART,Defect Sectors,{},sectors", device, sectors).map_err(|e| e.to_string())?;
+            }
         }
 
         Ok(())
@@ -105,9 +115,25 @@ impl Report {
         let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
         let device_rows = self.disk_results.iter()
             .map(|(name, result)| {
+                let temp_cell = result.smart_temp
+                    .map(|t| format!("{:.0}°C", t))
+                    .unwrap_or_else(|| "—".to_string());
+                let hours_cell = result.smart_hours
+                    .map(|h| format!("{}", h))
+                    .unwrap_or_else(|| "—".to_string());
+                let sectors_cell = result.smart_sectors
+                    .map(|s| {
+                        if s > 0 {
+                            format!("<span class=\"defect\">{}</span>", s)
+                        } else {
+                            format!("{}", s)
+                        }
+                    })
+                    .unwrap_or_else(|| "—".to_string());
                 format!(
-                    "<tr><td>{}</td><td>{:.1}</td><td>{:.1}</td><td>{:.1}</td><td>{:.2}</td></tr>",
-                    name, result.avg_linear_mbs, result.min_linear_mbs, result.max_linear_mbs, result.avg_seek_ms
+                    "<tr><td>{}</td><td>{:.1}</td><td>{:.1}</td><td>{:.1}</td><td>{:.2}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                    name, result.avg_linear_mbs, result.min_linear_mbs, result.max_linear_mbs, result.avg_seek_ms,
+                    temp_cell, hours_cell, sectors_cell
                 )
             })
             .collect::<Vec<_>>()
@@ -187,6 +213,10 @@ impl Report {
             margin-top: 2rem;
             text-align: right;
         }}
+        .defect {{
+            color: #ff4444;
+            font-weight: bold;
+        }}
     </style>
 </head>
 <body>
@@ -210,6 +240,9 @@ impl Report {
                     <th>Min Speed</th>
                     <th>Max Speed</th>
                     <th>Seek Latency (ms)</th>
+                    <th>Temperature (°C)</th>
+                    <th>Power-On Hrs</th>
+                    <th>Defect Sectors</th>
                 </tr>
             </thead>
             <tbody>

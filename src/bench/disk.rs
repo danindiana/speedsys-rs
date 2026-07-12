@@ -617,20 +617,128 @@ fn bench_random_seek_buffered(
 }
 
 #[derive(Clone, Debug, Default)]
-#[allow(dead_code)]
 pub struct SmartInfo {
     pub temperature: Option<f64>,
-    #[allow(dead_code)]
     pub power_on_hours: Option<u64>,
-    #[allow(dead_code)]
     pub reallocated_sectors: Option<u64>,
-    #[allow(dead_code)]
     pub pending_sectors: Option<u64>,
 }
 
+/// Parse SMART JSON from smartctl -j output. Handles both SATA and NVMe drives.
+/// For NVMe, `percentage_used` and `media_errors` are mapped to `reallocated_sectors` and
+/// `pending_sectors` fields respectively (semantics differ, but reuses existing field shape).
+fn parse_smart_json(value: &serde_json::Value) -> SmartInfo {
+    let mut result = SmartInfo::default();
+
+    // Try SATA first (ata_smart_attributes)
+    if let Some(ata) = value.get("ata_smart_attributes").and_then(|v| v.get("table")) {
+        if let Some(array) = ata.as_array() {
+            for attr in array {
+                let id = attr.get("id").and_then(|v| v.as_u64());
+                let name = attr.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                let raw_value = attr.get("raw").and_then(|v| v.get("value")).and_then(|v| v.as_u64());
+
+                match id {
+                    Some(194) | Some(_) if name.contains("Temperature") => {
+                        result.temperature = attr.get("current").and_then(|v| v.as_u64()).map(|v| v as f64);
+                    }
+                    Some(9) | Some(_) if name.contains("Power_On_Hours") => {
+                        result.power_on_hours = raw_value;
+                    }
+                    Some(5) | Some(_) if name.contains("Reallocated_Sector_Ct") => {
+                        result.reallocated_sectors = raw_value;
+                    }
+                    Some(197) | Some(_) if name.contains("Current_Pending_Sector") => {
+                        result.pending_sectors = raw_value;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    // Try NVMe if no SATA attributes found
+    if result.temperature.is_none() {
+        if let Some(nvme) = value.get("nvme_smart_health_information_log") {
+            result.temperature = nvme
+                .get("temperature")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as f64);
+            result.power_on_hours = nvme.get("power_on_hours").and_then(|v| v.as_u64());
+            // NVMe percentage_used maps to reallocated_sectors slot (used instead of literal sectors)
+            result.reallocated_sectors = nvme.get("percentage_used").and_then(|v| v.as_u64());
+            // NVMe media_errors maps to pending_sectors slot
+            result.pending_sectors = nvme.get("media_errors").and_then(|v| v.as_u64());
+        }
+    }
+
+    result
+}
+
 /// Try to read SMART data via smartctl (requires: apt install smartmontools).
-#[allow(dead_code)]
-pub fn read_smart_info(_device_path: &str) -> Option<SmartInfo> {
-    // Placeholder for Phase 4: smartctl -a -j integration
-    None
+pub fn read_smart_info(device_path: &str) -> Option<SmartInfo> {
+    use std::process::Command;
+
+    let output = Command::new("smartctl")
+        .args(["-a", "-j", device_path])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
+    Some(parse_smart_json(&json))
+}
+
+#[cfg(test)]
+mod smart_tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_sata_smart() {
+        let sata_json = serde_json::json!({
+            "ata_smart_attributes": {
+                "table": [
+                    {"id": 194, "name": "Temperature_Celsius", "current": 45, "raw": {"value": 45}},
+                    {"id": 9, "name": "Power_On_Hours", "raw": {"value": 8760}},
+                    {"id": 5, "name": "Reallocated_Sector_Ct", "raw": {"value": 0}},
+                    {"id": 197, "name": "Current_Pending_Sector", "raw": {"value": 2}}
+                ]
+            }
+        });
+
+        let result = parse_smart_json(&sata_json);
+        assert_eq!(result.temperature, Some(45.0));
+        assert_eq!(result.power_on_hours, Some(8760));
+        assert_eq!(result.reallocated_sectors, Some(0));
+        assert_eq!(result.pending_sectors, Some(2));
+    }
+
+    #[test]
+    fn test_parse_nvme_smart() {
+        let nvme_json = serde_json::json!({
+            "nvme_smart_health_information_log": {
+                "temperature": 40,
+                "power_on_hours": 1234,
+                "percentage_used": 15,
+                "media_errors": 0
+            }
+        });
+
+        let result = parse_smart_json(&nvme_json);
+        assert_eq!(result.temperature, Some(40.0));
+        assert_eq!(result.power_on_hours, Some(1234));
+        assert_eq!(result.reallocated_sectors, Some(15)); // NVMe percentage_used
+        assert_eq!(result.pending_sectors, Some(0)); // NVMe media_errors
+    }
+
+    #[test]
+    fn test_parse_empty_smart() {
+        let empty_json = serde_json::json!({});
+        let result = parse_smart_json(&empty_json);
+        assert_eq!(result.temperature, None);
+        assert_eq!(result.power_on_hours, None);
+    }
 }
