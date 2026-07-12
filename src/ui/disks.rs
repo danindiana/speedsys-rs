@@ -171,6 +171,25 @@ pub fn render_test(f: &mut Frame, app: &App) {
                 ]));
             }
         }
+
+        // Queue configuration
+        if result.queue_depth.is_some() || result.io_scheduler.is_some() {
+            left_lines.push(Line::from(""));
+
+            if let Some(depth) = result.queue_depth {
+                left_lines.push(Line::from(vec![
+                    Span::styled("Queue Depth: ", w),
+                    Span::styled(format!("{}", depth), y),
+                ]));
+            }
+
+            if let Some(sched) = &result.io_scheduler {
+                left_lines.push(Line::from(vec![
+                    Span::styled("Scheduler  : ", w),
+                    Span::styled(sched.clone(), y),
+                ]));
+            }
+        }
     } else {
         left_lines.push(Line::from(Span::styled(
             "  [Press t for quick test]",

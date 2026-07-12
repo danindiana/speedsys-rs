@@ -63,6 +63,10 @@ impl Report {
                                 "level": &result.raid_level,
                                 "members": result.raid_members,
                                 "state": &result.raid_state,
+                            },
+                            "queue": {
+                                "depth": result.queue_depth,
+                                "scheduler": &result.io_scheduler,
                             }
                         }))
                     })
@@ -119,6 +123,12 @@ impl Report {
             if let Some(state) = &result.raid_state {
                 writeln!(file, "{},RAID,State,{},—", device, state).map_err(|e| e.to_string())?;
             }
+            if let Some(depth) = result.queue_depth {
+                writeln!(file, "{},Queue,Depth,{},—", device, depth).map_err(|e| e.to_string())?;
+            }
+            if let Some(sched) = &result.io_scheduler {
+                writeln!(file, "{},Queue,Scheduler,{},—", device, sched).map_err(|e| e.to_string())?;
+            }
         }
 
         Ok(())
@@ -162,10 +172,18 @@ impl Report {
                         format!("<span class=\"{}\">{}</span>", class, s)
                     })
                     .unwrap_or_else(|| "—".to_string());
+                let queue_depth_cell = result.queue_depth
+                    .map(|d| format!("{}", d))
+                    .unwrap_or_else(|| "—".to_string());
+                let queue_sched_cell = result.io_scheduler
+                    .as_ref()
+                    .map(|s| s.clone())
+                    .unwrap_or_else(|| "—".to_string());
                 format!(
-                    "<tr><td>{}</td><td>{:.1}</td><td>{:.1}</td><td>{:.1}</td><td>{:.2}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                    "<tr><td>{}</td><td>{:.1}</td><td>{:.1}</td><td>{:.1}</td><td>{:.2}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
                     name, result.avg_linear_mbs, result.min_linear_mbs, result.max_linear_mbs, result.avg_seek_ms,
-                    temp_cell, hours_cell, sectors_cell, raid_level_cell, raid_members_cell, raid_state_cell
+                    temp_cell, hours_cell, sectors_cell, raid_level_cell, raid_members_cell, raid_state_cell,
+                    queue_depth_cell, queue_sched_cell
                 )
             })
             .collect::<Vec<_>>()
@@ -290,6 +308,8 @@ impl Report {
                     <th>RAID Level</th>
                     <th>Members</th>
                     <th>Array State</th>
+                    <th>Queue Depth</th>
+                    <th>I/O Scheduler</th>
                 </tr>
             </thead>
             <tbody>

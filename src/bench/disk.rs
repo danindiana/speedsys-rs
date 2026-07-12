@@ -59,6 +59,8 @@ pub struct DiskDevice {
     pub raid_level: Option<String>,
     pub raid_members: Option<usize>,
     pub raid_state: Option<String>,
+    pub queue_depth: Option<u32>,
+    pub io_scheduler: Option<String>,
 }
 
 // Linear read benchmark results including error tracking
@@ -109,6 +111,31 @@ fn read_raid_info(name: &str) -> (Option<String>, Option<usize>, Option<String>)
     (level, members, state)
 }
 
+/// Read queue depth and I/O scheduler for a device. Returns (nr_requests, scheduler_name).
+fn read_queue_info(name: &str) -> (Option<u32>, Option<String>) {
+    let depth_path = format!("/sys/block/{}/queue/nr_requests", name);
+    let queue_depth = std::fs::read_to_string(&depth_path)
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok());
+
+    let scheduler_path = format!("/sys/block/{}/queue/scheduler", name);
+    let io_scheduler = std::fs::read_to_string(&scheduler_path)
+        .ok()
+        .map(|s| {
+            // Scheduler format: "none mq-deadline [cfq]" or similar
+            // Extract the bracketed scheduler name, fallback to first if no brackets
+            if let Some(start) = s.find('[') {
+                if let Some(end) = s.find(']') {
+                    return s[start + 1..end].to_string();
+                }
+            }
+            // Fallback: use first non-empty word
+            s.split_whitespace().next().unwrap_or("unknown").to_string()
+        });
+
+    (queue_depth, io_scheduler)
+}
+
 /// Internal implementation: scan /sys/block for block devices.
 fn scan_disks_impl() -> Vec<DiskDevice> {
     let mut devices = Vec::new();
@@ -149,6 +176,8 @@ fn scan_disks_impl() -> Vec<DiskDevice> {
                             .map(|v| v != 0)
                             .unwrap_or(false);
 
+                        let (queue_depth, io_scheduler) = read_queue_info(&name);
+
                         devices.push(DiskDevice {
                             name: name.clone(),
                             path: format!("/dev/{}", name),
@@ -158,6 +187,8 @@ fn scan_disks_impl() -> Vec<DiskDevice> {
                             raid_level,
                             raid_members,
                             raid_state,
+                            queue_depth,
+                            io_scheduler,
                         });
                     }
                 }
@@ -784,5 +815,37 @@ mod smart_tests {
         assert_eq!(level, None);
         assert_eq!(members, None);
         assert_eq!(state, None);
+    }
+
+    #[test]
+    fn test_queue_scheduler_with_brackets() {
+        // Test parsing scheduler string with brackets: "none mq-deadline [cfq]"
+        let scheduler_line = "none mq-deadline [cfq]";
+        let parsed = if let Some(start) = scheduler_line.find('[') {
+            if let Some(end) = scheduler_line.find(']') {
+                scheduler_line[start + 1..end].to_string()
+            } else {
+                "unknown".to_string()
+            }
+        } else {
+            scheduler_line.split_whitespace().next().unwrap_or("unknown").to_string()
+        };
+        assert_eq!(parsed, "cfq");
+    }
+
+    #[test]
+    fn test_queue_scheduler_no_brackets() {
+        // Test parsing scheduler string without brackets (fallback)
+        let scheduler_line = "mq-deadline none";
+        let parsed = if let Some(start) = scheduler_line.find('[') {
+            if let Some(end) = scheduler_line.find(']') {
+                scheduler_line[start + 1..end].to_string()
+            } else {
+                "unknown".to_string()
+            }
+        } else {
+            scheduler_line.split_whitespace().next().unwrap_or("unknown").to_string()
+        };
+        assert_eq!(parsed, "mq-deadline");
     }
 }

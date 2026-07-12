@@ -40,6 +40,8 @@ pub struct DiskBenchResult {
     pub raid_level: Option<String>,
     pub raid_members: Option<usize>,
     pub raid_state: Option<String>,
+    pub queue_depth: Option<u32>,
+    pub io_scheduler: Option<String>,
     // I/O error tracking (item B from roadmap)
     pub read_errors: Vec<(f64, String)>, // (position %, error description)
     pub error_count: usize,
