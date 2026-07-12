@@ -56,6 +56,10 @@ pub struct Args {
     /// Output path for screenshot SVG
     #[arg(long, value_name = "FILE")]
     pub screenshot_out: Option<String>,
+
+    /// Show performance history for a device (e.g., /dev/sda)
+    #[arg(long, value_name = "DEVICE")]
+    pub show_history: Option<String>,
 }
 
 impl Args {
@@ -73,6 +77,7 @@ impl Args {
             && self.report.is_none()
             && self.report_csv.is_none()
             && self.report_html.is_none()
+            && self.show_history.is_none()
     }
 
     /// Get test mode (quick=true, full=false, none=None)
@@ -99,6 +104,48 @@ impl Args {
             None
         }
     }
+}
+
+/// Display performance history for a device
+pub fn print_history(device: &str) -> Result<(), String> {
+    let records = crate::history::load_history(device, 20)?;
+
+    if records.is_empty() {
+        println!("No history found for device: {}", device);
+        return Ok(());
+    }
+
+    println!("\n{:<40} {:<20} {:<20}", "Device History", device, "Last 20 runs");
+    println!("{}\n", "─".repeat(80));
+
+    if let Some(stats) = crate::history::calculate_stats(&records) {
+        println!("Linear Read (MB/s):");
+        println!("  Min:   {:>8.1}  Avg: {:>8.1}  Max: {:>8.1}",
+            stats.linear_min, stats.linear_avg, stats.linear_max);
+        println!("  Timespan: {} to {}", stats.oldest, stats.newest);
+        println!("  Samples:  {}\n", stats.record_count);
+
+        println!("Random Seek (ms):");
+        println!("  Min:   {:>8.3}  Avg: {:>8.3}  Max: {:>8.3}",
+            stats.seek_min, stats.seek_avg, stats.seek_max);
+        println!("  Timespan: {} to {}", stats.oldest, stats.newest);
+        println!("  Samples:  {}\n", stats.record_count);
+
+        // Show recent runs
+        println!("Recent runs (newest first):");
+        println!("{:<25} {:<15} {:<15}", "Timestamp", "Linear (MB/s)", "Seek (ms)");
+        println!("{}", "─".repeat(55));
+        for (i, record) in records.iter().enumerate() {
+            if i >= 10 {
+                break;
+            }
+            println!("{:<25} {:>14.1} {:>14.3}",
+                &record.timestamp[..19], record.avg_linear_mbs, record.avg_seek_ms);
+        }
+    }
+
+    println!();
+    Ok(())
 }
 
 /// Print available disks in a formatted table

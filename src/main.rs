@@ -5,6 +5,7 @@ mod ui;
 mod report;
 mod cli;
 mod worker;
+mod history;
 
 use app::{App, Screen};
 use bench::{BenchMsg, DiskBenchResult};
@@ -52,6 +53,14 @@ fn main() -> io::Result<()> {
         return test_mode(&sys, samples, sample_size, args.disk, &args);
     }
 
+    // Handle --show-history mode
+    if let Some(ref device) = args.show_history {
+        if let Err(e) = cli::print_history(device) {
+            eprintln!("Error: {}", e);
+        }
+        return Ok(());
+    }
+
     // Handle interactive TUI mode (default)
     if args.should_show_tui() {
         return tui_mode(&sys);
@@ -91,6 +100,7 @@ fn tui_mode(sys: &sysinfo::SysInfo) -> io::Result<()> {
                 match msg {
                     BenchMsg::Status(s) => app.bench_results.status = s,
                     BenchMsg::DiskUpdate(result) => {
+                        let _ = history::save_result(&result);  // Auto-save to history
                         app.disk_results.insert(result.device.clone(), result);
                     }
                     BenchMsg::Progress(curr, total, elapsed) => {
@@ -303,6 +313,7 @@ fn test_mode(sys: &sysinfo::SysInfo, samples: usize, sample_size_mb: usize, sele
                         println!("  {}", s);
                     }
                     BenchMsg::DiskUpdate(result) => {
+                        let _ = history::save_result(&result);  // Auto-save to history
                         disk_results.insert(result.device.clone(), result);
                     }
                     BenchMsg::Progress(curr, total, _elapsed) => {
@@ -500,6 +511,7 @@ fn screenshot_mode(sys: &sysinfo::SysInfo, screen_name: &str, out_path: &str) ->
                 result.avg_seek_ms = 0.15;
                 result.max_seek_ms = 0.30;
 
+                let _ = history::save_result(&result);  // Auto-save to history
                 app.disk_results.insert(disk_name, result);
                 app.bench_results.status = "✓ Test complete".to_string();
             }
