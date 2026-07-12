@@ -136,6 +136,41 @@ pub fn render_test(f: &mut Frame, app: &App) {
                 ]));
             }
         }
+
+        // RAID information
+        if result.raid_level.is_some()
+            || result.raid_members.is_some()
+            || result.raid_state.is_some()
+        {
+            left_lines.push(Line::from(""));
+
+            if let Some(level) = &result.raid_level {
+                left_lines.push(Line::from(vec![
+                    Span::styled("RAID Level : ", w),
+                    Span::styled(level.clone(), y),
+                ]));
+            }
+
+            if let Some(members) = result.raid_members {
+                left_lines.push(Line::from(vec![
+                    Span::styled("Members    : ", w),
+                    Span::styled(format!("{}", members), y),
+                ]));
+            }
+
+            if let Some(state) = &result.raid_state {
+                let state_style = match state.as_str() {
+                    "clean" => g,
+                    "recovering" | "check" => Style::default().fg(Color::Yellow),
+                    "degraded" | "failed" => Style::default().fg(Color::Red),
+                    _ => y,
+                };
+                left_lines.push(Line::from(vec![
+                    Span::styled("Array State: ", w),
+                    Span::styled(state.clone(), state_style),
+                ]));
+            }
+        }
     } else {
         left_lines.push(Line::from(Span::styled(
             "  [Press t for quick test]",

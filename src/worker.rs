@@ -67,6 +67,14 @@ pub fn run_disk_test(
         result.smart_sectors = smart.reallocated_sectors.map(|r| r + smart.pending_sectors.unwrap_or(0));
     }
 
+    // Copy RAID info from device metadata
+    let all_devices = disk::scan_disks();
+    if let Some(device) = all_devices.iter().find(|d| d.name == device_name) {
+        result.raid_level = device.raid_level.clone();
+        result.raid_members = device.raid_members;
+        result.raid_state = device.raid_state.clone();
+    }
+
     let _ = tx.send(BenchMsg::DiskUpdate(result));
     let _ = tx.send(BenchMsg::Status("✓ Test complete".into()));
 }

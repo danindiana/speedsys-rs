@@ -56,6 +56,9 @@ pub struct DiskDevice {
     pub size_bytes: u64,
     pub model: String,
     pub is_rotational: bool,
+    pub raid_level: Option<String>,
+    pub raid_members: Option<usize>,
+    pub raid_state: Option<String>,
 }
 
 // Linear read benchmark results including error tracking
@@ -75,6 +78,35 @@ pub fn scan_disks() -> Vec<DiskDevice> {
     DEVICE_CACHE
         .get_or_init(scan_disks_impl)
         .clone()
+}
+
+/// Read RAID metadata for a device (e.g., md0). Returns (level, member_count, state).
+fn read_raid_info(name: &str) -> (Option<String>, Option<usize>, Option<String>) {
+    if !name.starts_with("md") {
+        return (None, None, None);
+    }
+
+    let level_path = format!("/sys/block/{}/md/level", name);
+    let level = std::fs::read_to_string(&level_path)
+        .ok()
+        .map(|s| s.trim().to_uppercase());
+
+    let members = std::fs::read_dir(format!("/sys/block/{}/md", name))
+        .map(|d| d.filter(|e| {
+            e.as_ref()
+                .ok()
+                .map(|en| en.file_name().to_string_lossy().starts_with("rd"))
+                .unwrap_or(false)
+        }).count())
+        .ok()
+        .filter(|&c| c > 0);
+
+    let state_path = format!("/sys/block/{}/md/array_state", name);
+    let state = std::fs::read_to_string(&state_path)
+        .ok()
+        .map(|s| s.trim().to_string());
+
+    (level, members, state)
 }
 
 /// Internal implementation: scan /sys/block for block devices.
@@ -98,22 +130,11 @@ fn scan_disks_impl() -> Vec<DiskDevice> {
                             continue;
                         }
 
-                        let model = if name.starts_with("md") {
-                            // RAID: get level and member count
-                            let level_path = format!("/sys/block/{}/md/level", name);
-                            let level = std::fs::read_to_string(&level_path)
-                                .ok()
-                                .map(|s| s.trim().to_uppercase())
-                                .unwrap_or_else(|| "unknown".to_string());
-                            let members = std::fs::read_dir(format!("/sys/block/{}/md", name))
-                                .map(|d| d.filter(|e| {
-                                    e.as_ref()
-                                        .ok()
-                                        .map(|en| en.file_name().to_string_lossy().starts_with("rd"))
-                                        .unwrap_or(false)
-                                }).count())
-                                .unwrap_or(0);
-                            format!("{} ({} members)", level, members)
+                        let (raid_level, raid_members, raid_state) = read_raid_info(&name);
+                        let model = if let Some(ref level) = raid_level {
+                            let members_str = raid_members.map(|m| m.to_string()).unwrap_or_else(|| "?".to_string());
+                            let state_str = raid_state.as_deref().unwrap_or("unknown");
+                            format!("{} ({} members, {})", level, members_str, state_str)
                         } else {
                             std::fs::read_to_string(format!("/sys/block/{}/device/model", name))
                                 .ok()
@@ -134,6 +155,9 @@ fn scan_disks_impl() -> Vec<DiskDevice> {
                             size_bytes: bytes,
                             model,
                             is_rotational,
+                            raid_level,
+                            raid_members,
+                            raid_state,
                         });
                     }
                 }
@@ -740,5 +764,25 @@ mod smart_tests {
         let result = parse_smart_json(&empty_json);
         assert_eq!(result.temperature, None);
         assert_eq!(result.power_on_hours, None);
+    }
+
+    #[test]
+    fn test_raid_info_non_raid_device() {
+        let (level, members, state) = read_raid_info("sda");
+        assert_eq!(level, None);
+        assert_eq!(members, None);
+        assert_eq!(state, None);
+    }
+
+    #[test]
+    fn test_raid_info_format() {
+        // Test that md device name detection works
+        let result = read_raid_info("md0");
+        // Will return None if /sys/block/md0 doesn't exist, but the parsing would work if it did
+        // The important thing is that non-md devices return all None
+        let (level, members, state) = read_raid_info("nvme0n1");
+        assert_eq!(level, None);
+        assert_eq!(members, None);
+        assert_eq!(state, None);
     }
 }

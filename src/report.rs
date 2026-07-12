@@ -58,6 +58,11 @@ impl Report {
                                 "temperature_c": result.smart_temp,
                                 "power_on_hours": result.smart_hours,
                                 "defect_sectors": result.smart_sectors,
+                            },
+                            "raid": {
+                                "level": &result.raid_level,
+                                "members": result.raid_members,
+                                "state": &result.raid_state,
                             }
                         }))
                     })
@@ -105,6 +110,15 @@ impl Report {
             if let Some(sectors) = result.smart_sectors {
                 writeln!(file, "{},SMART,Defect Sectors,{},sectors", device, sectors).map_err(|e| e.to_string())?;
             }
+            if let Some(level) = &result.raid_level {
+                writeln!(file, "{},RAID,Level,{},—", device, level).map_err(|e| e.to_string())?;
+            }
+            if let Some(members) = result.raid_members {
+                writeln!(file, "{},RAID,Members,{},—", device, members).map_err(|e| e.to_string())?;
+            }
+            if let Some(state) = &result.raid_state {
+                writeln!(file, "{},RAID,State,{},—", device, state).map_err(|e| e.to_string())?;
+            }
         }
 
         Ok(())
@@ -130,10 +144,28 @@ impl Report {
                         }
                     })
                     .unwrap_or_else(|| "—".to_string());
+                let raid_level_cell = result.raid_level
+                    .as_ref()
+                    .map(|l| l.clone())
+                    .unwrap_or_else(|| "—".to_string());
+                let raid_members_cell = result.raid_members
+                    .map(|m| format!("{}", m))
+                    .unwrap_or_else(|| "—".to_string());
+                let raid_state_cell = result.raid_state
+                    .as_ref()
+                    .map(|s| {
+                        let class = match s.as_str() {
+                            "clean" => "raid-clean",
+                            "degraded" | "failed" => "raid-alert",
+                            _ => "raid-warning",
+                        };
+                        format!("<span class=\"{}\">{}</span>", class, s)
+                    })
+                    .unwrap_or_else(|| "—".to_string());
                 format!(
-                    "<tr><td>{}</td><td>{:.1}</td><td>{:.1}</td><td>{:.1}</td><td>{:.2}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                    "<tr><td>{}</td><td>{:.1}</td><td>{:.1}</td><td>{:.1}</td><td>{:.2}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
                     name, result.avg_linear_mbs, result.min_linear_mbs, result.max_linear_mbs, result.avg_seek_ms,
-                    temp_cell, hours_cell, sectors_cell
+                    temp_cell, hours_cell, sectors_cell, raid_level_cell, raid_members_cell, raid_state_cell
                 )
             })
             .collect::<Vec<_>>()
@@ -217,6 +249,18 @@ impl Report {
             color: #ff4444;
             font-weight: bold;
         }}
+        .raid-clean {{
+            color: #22c55e;
+            font-weight: bold;
+        }}
+        .raid-warning {{
+            color: #eab308;
+            font-weight: bold;
+        }}
+        .raid-alert {{
+            color: #ff4444;
+            font-weight: bold;
+        }}
     </style>
 </head>
 <body>
@@ -243,6 +287,9 @@ impl Report {
                     <th>Temperature (°C)</th>
                     <th>Power-On Hrs</th>
                     <th>Defect Sectors</th>
+                    <th>RAID Level</th>
+                    <th>Members</th>
+                    <th>Array State</th>
                 </tr>
             </thead>
             <tbody>
